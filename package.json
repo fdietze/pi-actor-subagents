@@ -1,0 +1,35 @@
+{
+  "name": "pi-actor-subagents",
+  "version": "0.1.0",
+  "description": "Run persistent actor-style subagent swarms inside pi.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "fdietze",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fdietze/pi-actor-subagents.git"
+  },
+  "type": "module",
+  "pi": {
+    "extensions": ["extensions/actor-subagents/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json",
+    "lint": "oxlint extensions",
+    "test": "find extensions -name '*.test.ts' -print0 | xargs -0 -r node --test",
+    "ci": "npm run typecheck && npm run lint && npm run test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
+    "@types/node": "24.12.4",
+    "typebox": "1.3.7"
+  }
+}

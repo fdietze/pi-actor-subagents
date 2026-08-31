@@ -1,0 +1,16 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Keep CI and local development on the same Nix-owned toolchain.
+      # https://github.com/DeterminateSystems/nix-installer-action
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix develop --command npm ci
+      - run: nix develop --command npm run ci
