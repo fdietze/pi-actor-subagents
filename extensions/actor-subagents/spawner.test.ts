@@ -273,7 +273,7 @@ test("deliver is fire-and-forget: does not await the target's turn", async () =>
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
 	withMain(engine, []);
 	// Agent-message delivery never resolves (simulates a long-running turn). spawnAgent with an
-	// initial message must still resolve — otherwise the spawn_agent tool would hang.
+	// initial message must still resolve — otherwise the spawn_subagent tool would hang.
 	class BlockingSession extends FakeSession {
 		async sendAgentMessage() {
 			return new Promise<void>(() => {});

@@ -3,7 +3,7 @@
  * reach other agents through, and the protocol it must follow (task-confirmation handshake,
  * reporting direction, event-driven turns). The caller's spawn prompt is appended last.
  *
- * The same protocol rules are restated in condensed form in the spawn_agent and send_message
+ * The same protocol rules are restated in condensed form in the spawn_subagent and send_message
  * descriptions in agent-tools.ts — an agent reads those at call time and this at boot time.
  * Change them together. agent-system-prompt.test.ts pins the rendered text verbatim.
  */
@@ -16,7 +16,7 @@ export function agentSystemPrompt(
     `You are agent "${name}" in a multi-agent system.`,
     `You were spawned by "${spawnedBy}".`,
     "You can talk to other agents with these tools:",
-    "- spawn_agent({name, systemPrompt, overrideModel?, overrideThinkingLevel?, message}): create a new agent (message = its first task).",
+    "- spawn_subagent({name, systemPrompt, overrideModel?, overrideThinkingLevel?, message}): create a subagent inside this session (message = its first task).",
     '- send_message({to, content}): to is an array of agent names (multicast); fire-and-forget (e.g. ["main"]).',
     "- list_agents(): see who exists.",
     "- kill_agent({name}): terminate agents by name array. Killing an agent also kills every agent it spawned (its whole subtree). You cannot kill 'main'.",

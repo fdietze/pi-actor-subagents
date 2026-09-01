@@ -261,7 +261,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 		if (!rec?.view) {
 			hasAbove = false;
 			hasBelow = false;
-			return fillViewport([theme.fg("muted", "  (no agents — create one with spawn_agent)")]);
+			return fillViewport([theme.fg("muted", "  (no agents — create one with spawn_subagent)")]);
 		}
 		const { doc, scroll } = documentFor(rec.view);
 		doc.sync({

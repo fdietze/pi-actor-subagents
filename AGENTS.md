@@ -28,7 +28,7 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 ## External interfaces
 
 - Pi package entry: `extensions/actor-subagents/index.ts`
-- Agent tools: `spawn_agent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, `resume_agents`
+- Agent tools: `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, `resume_agents`
 - Commands: `/agents`, `/agents-pause`, `/agents-resume`, `/agents-kill-all`, `/agents-feed`
 - Custom message type and details shape: `agent-message.ts`
 - Child capability policy: `$XDG_CONFIG_HOME/pi/actor-subagents/child-extensions.json`

@@ -40,6 +40,6 @@ The engine, foreground sink, foreground state, and restore guard use versioned `
 
 ## Interfaces
 
-The agent-facing tools are `spawn_agent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Foreground commands are `/agents`, `/agents-pause`, `/agents-resume`, `/agents-kill-all`, and `/agents-feed`. Their names, result/message formats, roster format, domain vocabulary, and persistence layout are compatibility surfaces.
+The agent-facing tools are `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Foreground commands are `/agents`, `/agents-pause`, `/agents-resume`, `/agents-kill-all`, and `/agents-feed`. Their names, result/message formats, roster format, domain vocabulary, and persistence layout are compatibility surfaces.
 
 The package has no service or network interface of its own. Model traffic and credentials are handled by pi. The extension inherits pi's process authority, so the explicit child-extension policy is the primary capability boundary introduced here.

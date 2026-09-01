@@ -6,7 +6,7 @@
  * tool — an agent cannot spoof another sender. index.ts registers these for 'main' and passes
  * them to each child session as customTools.
  *
- * The protocol rules in the spawn_agent/send_message descriptions restate, in condensed form,
+ * The protocol rules in the spawn_subagent/send_message descriptions restate, in condensed form,
  * what agent-system-prompt.ts states at boot time. Change them together.
  */
 import {
@@ -37,7 +37,7 @@ import { THINKING_LEVELS } from "./thinking-level.ts";
 // No indents (they only waste width): scalar args sit inline on the title line for density,
 // multiline string fields (e.g. systemPrompt) follow as unindented blocks.
 // Collapsed-preview budget per block field: at most this many lines / characters are shown
-// when the tool call is NOT expanded. spawn_agent.systemPrompt + .message and send_message
+// when the tool call is NOT expanded. spawn_subagent.systemPrompt + .message and send_message
 // .content are the long fields this bounds; expanding (app.tools.expand) shows them in full.
 const BLOCK_COLLAPSE_LINES = 2;
 const BLOCK_COLLAPSE_CHARS = 200;
@@ -110,17 +110,18 @@ export function makeAgentTools(
   } = deps;
   return [
     defineTool({
-      name: "spawn_agent",
-      label: "Spawn Agent",
+      name: "spawn_subagent",
+      label: "Spawn Subagent",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "spawn_agent",
+          "spawn_subagent",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
         ),
       description:
-        "Create a new agent with a system prompt and its first message (the task). It can then be messaged by name. " +
+        "Create a subagent — a helper that runs inside your current session. Give it a system prompt and its first message (the task). " +
+        "It can then be messaged by name. " +
         "Event-driven & fire-and-forget: after spawning, END YOUR TURN — you are automatically re-woken when an agent " +
         "messages you back. Do NOT poll list_agents or wait in a loop for completion; it wastes turns. Inspect " +
         "(list_agents/agent_history) only if you suspect something went wrong. The new agent's first reply will be " +

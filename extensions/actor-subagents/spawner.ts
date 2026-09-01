@@ -186,7 +186,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 	): { handle: AgentHandle; view: AgentView; close: () => Promise<void>; reconfigure: NonNullable<AgentRecord["reconfigure"]> } => {
 		const handle: AgentHandle = {
 			// Fire-and-forget: Pi's custom-message delivery awaits the prompted turn. Awaiting it
-			// would block the caller (e.g. the spawn_agent tool) until the target agent finishes.
+			// would block the caller (e.g. the spawn_subagent tool) until the target agent finishes.
 			// Kick the turn and return; a
 			// late failure surfaces as an engine error event (visible in /agents-feed + panel).
 			// deliverAs "steer": if the target is mid-turn, deliver at the next turn boundary

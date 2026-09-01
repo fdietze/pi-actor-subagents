@@ -10,7 +10,7 @@ pi install git:github.com/fdietze/pi-actor-subagents
 
 ## Interface
 
-The agent receives `spawn_agent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Child agents receive the orchestration tools through pi's `customTools`; actor-subagents is not recursively loaded as a child extension.
+The agent receives `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Child agents receive the orchestration tools through pi's `customTools`; actor-subagents is not recursively loaded as a child extension.
 
 The interactive UI shows a compact roster and provides:
 
