@@ -57,7 +57,7 @@ test("formatHistory: thinking shown/hidden per flag; tool calls + results render
 	assert.match(hidden, /assistant: on it/);
 });
 
-test("formatHistory labels peer traffic as an agent message, not a user message", () => {
+test("formatHistory labels peer traffic as a subagent message, not a user message", () => {
 	const out = formatHistory({
 		name: "coder",
 		messages: [
@@ -69,7 +69,7 @@ test("formatHistory labels peer traffic as an agent message, not a user message"
 			},
 		],
 	});
-	assert.match(out, /#0 agent · reviewer: Found it\./);
+	assert.match(out, /#0 subagent: reviewer: Found it\./);
 	assert.doesNotMatch(out, /#0 user:/);
 });
 

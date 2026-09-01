@@ -71,12 +71,12 @@ export function formatAgentMessageDisplay(message: RoutedAgentMessage): { label:
 	const senders = [...new Set(message.parts.map((part) => part.from))];
 	if (senders.length === 1) {
 		return {
-			label: `agent · ${senders[0]}`,
+			label: `subagent: ${senders[0]}`,
 			body: message.parts.map((part) => part.content).join("\n\n"),
 		};
 	}
 	return {
-		label: `agents · ${senders.join(", ")}`,
+		label: `subagents: ${senders.join(", ")}`,
 		body: message.parts.map((part) => `[${part.from}]\n${part.content}`).join("\n\n"),
 	};
 }
