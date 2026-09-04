@@ -32,10 +32,8 @@ import { makeAgentTools } from "./agent-tools.ts";
 import { parseChildExtensionPolicy } from "./child-extension-policy.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
 import {
-  formatFeedLines,
   formatKillResult,
   formatResumeSummary,
-  formatSnapshot,
   type KillOutcome,
   type ResumeSummary,
 } from "./feed.ts";
@@ -375,7 +373,7 @@ export default function subagents(pi: ExtensionAPI) {
           ),
         );
       } catch {
-        /* no live foreground session — escalation surfaces in /subagents-feed + panel instead */
+        /* no live foreground session — escalation surfaces in the panel instead */
       }
     }
     updateStatus();
@@ -931,28 +929,4 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  // The textual counterpart of the panel: the same roster the list_subagents tool prints, so the
-  // human can read the swarm state without opening (and closing) an overlay.
-  pi.registerCommand("subagents-list", {
-    description: "Show the subagent roster as text.",
-    handler: async (_args, ctx) => {
-      const { used, total } = engine.budget;
-      const ordered = orderAgents(engine.list(), engine.getMessageMatrix());
-      ctx.ui.notify(
-        formatSnapshot(ordered, used, total, "main", engine.isPaused()),
-        "info",
-      );
-    },
-  });
-
-  pi.registerCommand("subagents-feed", {
-    description: "Show the agent activity log (last 40 events).",
-    handler: async (_args, ctx) => {
-      const lines = formatFeedLines(engine.events).slice(-40);
-      ctx.ui.notify(
-        lines.length ? lines.join("\n") : "(no activity yet)",
-        "info",
-      );
-    },
-  });
 }

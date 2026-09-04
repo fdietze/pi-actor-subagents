@@ -2,13 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	formatSnapshot,
-	formatFeedLines,
 	normalizeTargets,
 	formatMulticastResult,
 	formatKillResult,
 	formatResumeSummary,
 } from "./feed.ts";
-import type { AgentRecord, AgentEvent } from "./engine.ts";
+import type { AgentRecord } from "./engine.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 	name: "a",
@@ -142,45 +141,6 @@ test("formatSnapshot shows context percent and relative age", () => {
 	const out = formatSnapshot([withCtx], 0, 100, "main", false, 10_000);
 	assert.match(out, /ctx:42%/);
 	assert.match(out, /last 5s/);
-});
-
-test("formatFeedLines renders one line per event newest-aware", () => {
-	const events: AgentEvent[] = [
-		{ type: "spawn", name: "coder", by: "main", ts: 0 },
-		{ type: "route", from: "main", to: "coder", preview: "do x", buffered: false, ts: 0 },
-		{ type: "pause", reason: "manual", names: [], ts: 0 },
-		{ type: "error", name: "coder", reason: "boom", ts: 0 },
-	];
-	const lines = formatFeedLines(events);
-	assert.equal(lines.length, 4);
-	assert.match(lines[0], /spawn.*coder/);
-	assert.match(lines[1], /main.*->.*coder/);
-	assert.match(lines[2], /pause.*manual/i);
-	assert.match(lines[3], /error.*coder.*boom/);
-	assert.doesNotMatch(lines[1], /buffered/);
-});
-
-test("formatFeedLines names the agents of a per-agent pause/resume", () => {
-	const lines = formatFeedLines([
-		{ type: "pause", reason: "manual", names: ["coder", "tester"], ts: 0 },
-		{ type: "resume", names: ["coder"], ts: 0 },
-		{ type: "resume", names: [], ts: 0 },
-	]);
-	assert.match(lines[0], /pause\s+coder, tester \(manual\)/);
-	assert.match(lines[1], /resume\s+coder/);
-	assert.match(lines[2], /swarm live/);
-});
-
-test("formatFeedLines does not present main as spawned by itself", () => {
-	const lines = formatFeedLines([{ type: "spawn", name: "main", by: "main", ts: 0 }]);
-	assert.equal(lines[0], "start   main (foreground)");
-});
-
-test("formatFeedLines marks a buffered route so a paused swarm never looks delivered", () => {
-	const lines = formatFeedLines([
-		{ type: "route", from: "main", to: "coder", preview: "do x", buffered: true, ts: 0 },
-	]);
-	assert.match(lines[0], /main -> coder \(buffered\): do x/);
 });
 
 test("normalizeTargets: dedupe, trim, drop empty", () => {

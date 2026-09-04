@@ -3,7 +3,7 @@
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
 import { agentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, AgentEvent, RouteResult } from "./engine.ts";
+import type { AgentRecord, RouteResult } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
@@ -85,30 +85,6 @@ export function formatSnapshot(
 		? `agents (budget ${turnsUsed}/${turnBudget}; PAUSED — messages are buffering; /subagents-resume to continue):`
 		: `agents (budget ${turnsUsed}/${turnBudget}):`;
 	return [scheduler, ...rows].join("\n");
-}
-
-export function formatFeedLines(events: AgentEvent[]): string[] {
-	return events.map((e) => {
-		switch (e.type) {
-			// main is the foreground chat, not something anyone spawned: it registers itself as
-			// its own spawner, and "(by main)" would read as if it had a parent.
-			case "spawn":
-				return e.name === "main" ? "start   main (foreground)" : `spawn   ${e.name} (by ${e.by})`;
-			case "route":
-				return `route   ${e.from} -> ${e.to}${e.buffered ? " (buffered)" : ""}: ${e.preview}`;
-			case "turn":
-				return `turn    ${e.name}`;
-			// Named agents mean a per-agent pause/resume; an empty list means the whole swarm.
-			case "pause":
-				return e.names.length ? `pause   ${e.names.join(", ")} (${e.reason})` : `pause   (swarm paused: ${e.reason})`;
-			case "resume":
-				return e.names.length ? `resume  ${e.names.join(", ")}` : `resume  (swarm live)`;
-			case "kill":
-				return `kill    ${e.name}`;
-			case "error":
-				return `error   ${e.name}: ${e.reason}`;
-		}
-	});
 }
 
 /** Normalizes the target list: trims, drops empties, dedupes. */
