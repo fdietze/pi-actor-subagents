@@ -151,7 +151,12 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		return session.subscribe((ev) => {
 			if (ev.type === "turn_start") {
 				const r = engine.recordTurnStart(name);
-				if (r.abort) void session.abort();
+				// Fire-and-forget, but never as an unhandled rejection: this runs inside an SDK event
+				// callback, where a rejected promise would take the whole pi process down.
+				if (r.abort)
+					void Promise.resolve(session.abort()).catch((e) =>
+						engine.reportError(name, e instanceof Error ? e.message : String(e)),
+					);
 			}
 			if (ev.type === "message_start" || ev.type === "message_update") {
 				const msg = ev.message as { role?: string } | undefined;
@@ -215,9 +220,14 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 				await session.sendUserMessage(text);
 			},
 			// Bash first: abort() ends the agent loop but a tool already running keeps going, so a
-			// pause that leaves a build or test run alive would not be a pause at all.
+			// pause that leaves a build or test run alive would not be a pause at all. A failing bash
+			// cancel must not swallow the agent abort — stopping the loop is the part that must happen.
 			abort: async () => {
-				await session.abortBash();
+				try {
+					await session.abortBash();
+				} catch (e) {
+					engine.reportError(name, `bash abort failed: ${e instanceof Error ? e.message : String(e)}`);
+				}
 				await session.abort();
 			},
 		};

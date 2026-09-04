@@ -63,14 +63,16 @@ export interface RosterEntry {
 }
 
 /**
- * Swarm-wide scheduler state line, shown below the roster (panel) and footer. Expresses
- * the mode that /subagents-pause and /subagents-resume toggle plus the real activity count,
- * and makes paused mailbox behavior explicit. The fine-grained per-agent phase
- * (thinking/tool:.../idle) lives in the rows; this line is only the global mode.
+ * Scheduler state line, shown below the roster (panel) and footer. `swarmPaused` is the
+ * swarm-wide stop (turn budget / restored session) that holds every agent; `pausedCount` is how
+ * many agents the human paused individually while the swarm itself runs. Keeping them apart
+ * matters: claiming "messages buffer" for the whole swarm while other agents keep working and
+ * receiving mail would be false. The per-agent phase (thinking/tool:.../paused) lives in the rows.
  */
-export function swarmStateLine(paused: boolean, runningCount: number): string {
-	if (paused) return " ⏸ PAUSED — messages buffer · /subagents-resume to continue ";
-	return ` ▶ live · ${runningCount > 0 ? `${runningCount} working` : "idle"} `;
+export function swarmStateLine(swarmPaused: boolean, runningCount: number, pausedCount = 0): string {
+	if (swarmPaused) return " ⏸ PAUSED — messages buffer · /subagents-resume to continue ";
+	const activity = runningCount > 0 ? `${runningCount} working` : "idle";
+	return ` ▶ live · ${activity}${pausedCount > 0 ? ` · ${pausedCount} paused` : ""} `;
 }
 
 /**

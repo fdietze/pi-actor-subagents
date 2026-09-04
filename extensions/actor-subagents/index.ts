@@ -328,7 +328,11 @@ export default function subagents(pi: ExtensionAPI) {
       const running = background.filter(
         (a) => agentStatus(a).kind === "working",
       ).length;
-      const stateLine = swarmStateLine(engine.isPaused(), running);
+      const stateLine = swarmStateLine(
+        engine.isPaused(),
+        running,
+        engine.pausedAgents().length,
+      );
       const pauseLine = engine.isPaused()
         ? theme.bg(
             "toolPendingBg",
@@ -641,6 +645,18 @@ export default function subagents(pi: ExtensionAPI) {
   const parseNames = (args: string): string[] =>
     args.split(/[\s,]+/).filter((name) => name.length > 0);
 
+  // Aborting is fire-and-forget, but a rejected promise with no handler would take pi down.
+  const abortAgent = async (name: string): Promise<void> => {
+    try {
+      await engine.get(name)?.handle.abort();
+    } catch (error) {
+      engine.reportError(
+        name,
+        `abort failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+
   // Capture the foreground model (for inheritance to spawned agents).
   pi.on("model_select", (event) => {
     captureForegroundModel(event.model);
@@ -855,15 +871,19 @@ export default function subagents(pi: ExtensionAPI) {
     description:
       "Pause agents by name (empty = all); their turns stop and new messages buffer until resumed.",
     handler: async (args, ctx) => {
-      const paused = engine.pause(parseNames(args));
+      const requested = parseNames(args);
+      // Named agents that do not exist are reported back: a typo must not read as "nothing to do".
+      const unknown = requested.filter((name) => !engine.has(name));
+      const paused = engine.pause(requested);
       // Abort AFTER the pause is recorded, so a turn cut here cannot start a successor.
-      for (const name of paused) void engine.get(name)?.handle.abort();
-      ctx.ui.notify(
+      for (const name of paused) void abortAgent(name);
+      const notice = [
         paused.length
           ? `PAUSED ${paused.join(", ")}; new messages will buffer. Use /subagents-resume to continue.`
           : "No agents to pause.",
-        "warning",
-      );
+        ...(unknown.length ? [`unknown: ${unknown.join(", ")}`] : []),
+      ].join(" · ");
+      ctx.ui.notify(notice, "warning");
       updateStatus();
     },
   });

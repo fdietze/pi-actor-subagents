@@ -161,6 +161,8 @@ export type RouteResult =
 export interface EngineResumeResult {
 	wasPaused: boolean;
 	bufferedMessages: number;
+	/** Whether this resume actually lifted the budget stop and reset the turn count. */
+	budgetRearmed: boolean;
 	/** A named resume was rejected because the swarm-wide budget pause holds everything. */
 	blockedByBudget?: boolean;
 }
@@ -305,7 +307,11 @@ export class Engine {
 		rec.pending = false;
 		const buffered = rec.buffer ?? [];
 		rec.buffer = undefined;
-		for (const t of buffered) void opts.handle.deliver(t);
+		// A pause can land while the session is being created. Handing the reservation's messages to
+		// a paused agent would start a turn that recordTurnStart aborts, leaving them unread with
+		// nobody to re-trigger — so they join the paused inbox, ahead of anything buffered later.
+		if (this.isAgentPaused(rec)) rec.pausedInbox = [...buffered, ...(rec.pausedInbox ?? [])];
+		else for (const t of buffered) void opts.handle.deliver(t);
 	}
 
 	/** Release a reservation (session creation failed). */
@@ -414,9 +420,21 @@ export class Engine {
 		return all.filter((rec) => wanted.has(rec.name));
 	}
 
-	/** True when anything is stopped: the swarm-wide budget pause or any manual per-agent pause. */
+	/**
+	 * Is the SWARM stopped? True only for the swarm-wide causes (turn budget, restored session),
+	 * which stop every agent including ones spawned later. A manually paused agent is reported by
+	 * pausedAgents() instead — conflating the two made the UI claim a stopped swarm while the
+	 * other agents kept running and receiving mail.
+	 */
 	isPaused(): boolean {
-		return this.budgetPaused || this.background().some((rec) => rec.paused === true);
+		return this.budgetPaused;
+	}
+
+	/** Names of the manually paused background agents (the per-agent counterpart of isPaused). */
+	pausedAgents(): string[] {
+		return this.background()
+			.filter((rec) => rec.paused === true)
+			.map((rec) => rec.name);
 	}
 
 	/** Is this agent stopped? Either cause blocks its turns and buffers its incoming messages. */
@@ -428,7 +446,12 @@ export class Engine {
 	 * Manually pause agents — all background agents when no names are given, otherwise exactly
 	 * the named ones. Returns the agents that were not already paused, so the caller can abort
 	 * their running turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers
-	 * that interrupted work; idle agents are left alone.
+	 * that interrupted work; idle agents are left alone. Pausing everything covers the agents
+	 * that exist NOW (a still-pending reservation included); an agent spawned afterwards starts
+	 * live, since only 'main' can spawn while the others are paused.
+	 *
+	 * Nothing paused means no event: a mistyped or already-paused name must not show up in the
+	 * feed as a pause that happened.
 	 */
 	pause(names?: string[]): string[] {
 		const swarmWide = !names || names.length === 0;
@@ -440,7 +463,8 @@ export class Engine {
 			// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
 			if (rec.activity !== undefined) rec.pausedMidTurn = true;
 		}
-		this.emit({ type: "pause", reason: "manual", names: swarmWide ? [] : newlyPaused, ts: Date.now() });
+		if (newlyPaused.length > 0)
+			this.emit({ type: "pause", reason: "manual", names: swarmWide ? [] : newlyPaused, ts: Date.now() });
 		return newlyPaused;
 	}
 
@@ -459,27 +483,36 @@ export class Engine {
 	}
 
 	/**
-	 * Resume agents. Without names this is the "resume everything" verb: it re-arms the turn
-	 * budget, clears every pause and releases every buffered inbox. It is a no-op when nothing
-	 * is paused — re-arming a live swarm would silently reset the safety valve, so any caller
-	 * could poll it away (Inversion: exclude a swarm that never reaches its budget stop).
+	 * Resume agents. Without names this is the "resume everything" verb: it clears every pause and
+	 * releases every buffered inbox. It is a no-op when nothing is paused.
 	 *
-	 * With names it clears only those agents' manual pause and deliberately does NOT re-arm the
-	 * budget. While the budget pause holds it does nothing at all and says so: releasing one
-	 * agent's inbox then would hand it work that recordTurnStart immediately aborts, leaving the
-	 * message unprocessed in its transcript with nobody re-triggering it.
+	 * The turn budget is re-armed only when the budget stop is what is being lifted. Re-arming it
+	 * on any other resume would reset the safety valve without it ever having tripped, and both
+	 * 'main' and the human can reach this verb, so the valve could be polled away (Inversion:
+	 * exclude a swarm that never reaches its budget stop).
+	 *
+	 * With names it clears only those agents' manual pause. While the budget stop holds it does
+	 * nothing at all and says so: releasing one agent's inbox then would hand it work that
+	 * recordTurnStart immediately aborts, leaving the message unprocessed in its transcript with
+	 * nobody re-triggering it.
 	 */
 	resume(names?: string[]): EngineResumeResult {
 		const swarmWide = !names || names.length === 0;
+		let budgetRearmed = false;
 		if (swarmWide) {
-			if (!this.isPaused()) return { wasPaused: false, bufferedMessages: 0 };
-			this.budgetPaused = false;
-			this.pauseReason = undefined;
-			this.turnsUsed = 0;
+			if (!this.budgetPaused && this.pausedAgents().length === 0)
+				return { wasPaused: false, bufferedMessages: 0, budgetRearmed };
+			if (this.budgetPaused) {
+				this.budgetPaused = false;
+				this.pauseReason = undefined;
+				this.turnsUsed = 0;
+				budgetRearmed = true;
+			}
 		} else {
-			if (this.budgetPaused) return { wasPaused: false, bufferedMessages: 0, blockedByBudget: true };
+			if (this.budgetPaused)
+				return { wasPaused: false, bufferedMessages: 0, budgetRearmed, blockedByBudget: true };
 			if (!this.background(names).some((rec) => rec.paused === true))
-				return { wasPaused: false, bufferedMessages: 0 };
+				return { wasPaused: false, bufferedMessages: 0, budgetRearmed };
 		}
 
 		let bufferedMessages = 0;
@@ -500,7 +533,7 @@ export class Engine {
 		}
 
 		this.emit({ type: "resume", names: swarmWide ? [] : released.map((rec) => rec.name), ts: Date.now() });
-		return { wasPaused: true, bufferedMessages };
+		return { wasPaused: true, bufferedMessages, budgetRearmed };
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {
@@ -526,6 +559,8 @@ export class Engine {
 	 * text unread with nobody to re-trigger it.
 	 */
 	deliverUser(to: string, text: string): DeliverUserResult {
+		// 'main' IS the chat the human is typing in; there is no child session to hand a turn to.
+		if (to === "main") return { outcome: "refused", reason: "'main' is the chat you are typing in" };
 		const target = this.agents.get(to);
 		if (!target) return { outcome: "refused", reason: `unknown agent '${to}'` };
 		if (!target.handle.deliverUser) return { outcome: "refused", reason: `'${to}' is still spawning` };

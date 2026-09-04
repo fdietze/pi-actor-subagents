@@ -403,7 +403,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 				lines.push(truncateToWidth(line, width));
 			}
 			// Global swarm mode (paused/live) below the list — one source of truth in panel-logic.
-			const stateLine = swarmStateLine(deps.engine.isPaused(), running);
+			const stateLine = swarmStateLine(deps.engine.isPaused(), running, deps.engine.pausedAgents().length);
 			lines.push(
 				deps.engine.isPaused()
 					? theme.bg("toolPendingBg", truncateToWidth(stateLine.padEnd(width), width))

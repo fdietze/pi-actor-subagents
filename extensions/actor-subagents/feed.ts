@@ -158,6 +158,8 @@ export interface ResumeSummary {
 	wasPaused: boolean;
 	bufferedMessages: number;
 	retriggered: number;
+	/** Whether the turn budget was actually re-armed (only lifting the budget stop does that). */
+	budgetRearmed: boolean;
 	/** A named resume hit the swarm-wide budget pause, which only a full resume can re-arm. */
 	blockedByBudget?: boolean;
 }
@@ -178,7 +180,9 @@ export function formatResumeSummary(summary: ResumeSummary): string {
 		"agents resumed",
 		`released ${summary.bufferedMessages} buffered messages`,
 		`retriggered ${summary.retriggered} interrupted ${noun}`,
-		"budget re-armed",
+		// Only a resume that lifted the budget stop reset the turn count; saying so otherwise
+		// would credit work this call did not do.
+		...(summary.budgetRearmed ? ["budget re-armed"] : []),
 	].join(" · ");
 }
 

@@ -205,17 +205,22 @@ test("formatMulticastResult distinguishes delivered, paused-buffered, and failed
 
 test("formatResumeSummary reports scheduler, released buffer, retriggers, and budget", () => {
 	assert.equal(
-		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1 }),
+		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1, budgetRearmed: true }),
 		"agents resumed · released 2 buffered messages · retriggered 1 interrupted agent · budget re-armed",
 	);
 	// A live swarm is not resumed at all: claiming a re-armed budget here would be false.
 	assert.equal(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0 }),
+		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, budgetRearmed: false }),
 		"agents already live · nothing to resume",
+	);
+	// A named resume clears manual pauses only, so claiming a re-armed budget would be false.
+	assert.equal(
+		formatResumeSummary({ wasPaused: true, bufferedMessages: 0, retriggered: 0, budgetRearmed: false }),
+		"agents resumed · released 0 buffered messages · retriggered 0 interrupted agents",
 	);
 	// A named resume cannot lift the swarm-wide budget stop; say what actually helps.
 	assert.match(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, blockedByBudget: true }),
+		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, budgetRearmed: false, blockedByBudget: true }),
 		/turn budget/,
 	);
 });

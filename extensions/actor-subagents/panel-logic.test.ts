@@ -221,6 +221,14 @@ test("swarmStateLine: paused buffering vs live with activity count", () => {
 	assert.doesNotMatch(swarmStateLine(false, 0), /running/);
 });
 
+test("swarmStateLine: individually paused agents are counted, not reported as a stopped swarm", () => {
+	const line = swarmStateLine(false, 2, 1);
+	assert.match(line, /live/);
+	assert.match(line, /2 working/);
+	assert.match(line, /1 paused/);
+	assert.doesNotMatch(line, /PAUSED/);
+});
+
 
 test("statusTone: a failed turn is its own tone, truncated dims like idle, work is busy", () => {
 	assert.equal(statusTone({ kind: "idle", outcome: "error" }), "error");

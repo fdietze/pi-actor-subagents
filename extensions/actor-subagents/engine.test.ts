@@ -160,17 +160,29 @@ test("recordTurnStart aborts while paused", () => {
 	assert.match(r.reason ?? "", /paused/i);
 });
 
-test("resume clears the pause and resets the budget", () => {
+test("resume clears the budget stop and resets the turn count", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 1 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.recordTurnStart("a"); // uses budget
-	e.pause();
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
+	e.recordTurnStart("a"); // reaches the budget -> swarm-wide stop
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: true });
 	assert.equal(e.isPaused(), false);
 	assert.equal(e.budget.used, 0);
 	assert.equal(e.events.at(-1)?.type, "resume");
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0, budgetRearmed: false });
 	assert.equal(e.recordTurnStart("a").abort, false);
+});
+
+test("a manual pause/resume cycle does NOT re-arm the budget", () => {
+	// Inversion: the valve must not be resettable by a verb that anyone (including main via
+	// resume_subagents) can call without the budget ever having tripped.
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
+	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
+	e.recordTurnStart("a");
+	e.recordTurnStart("a");
+	e.pause(["a"]);
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
+	assert.equal(e.budget.used, 2);
+	assert.equal(e.get("a")?.paused, false);
 });
 
 test("resume on a live swarm is a no-op: the budget is NOT re-armed", () => {
@@ -180,7 +192,7 @@ test("resume on a live swarm is a no-op: the budget is NOT re-armed", () => {
 	e.recordTurnStart("a");
 	const before = e.events.length;
 	// Re-arming here would let any caller poll the safety valve away.
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0, budgetRearmed: false });
 	assert.equal(e.budget.used, 2);
 	assert.equal(e.events.length, before, "no resume event for a swarm that was never paused");
 });
@@ -478,7 +490,7 @@ test("resume releases a paused inbox as one ordered batch", async () => {
 
 	assert.deepEqual(delivered, []); // Buffered
 
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 2 });
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 2, budgetRearmed: false });
 
 	assert.deepEqual(delivered, [
 		{ parts: [{ from: "main", content: "ping 1" }, { from: "main", content: "ping 2" }] },
@@ -594,7 +606,9 @@ test("pause(names) stops only the named agents; the rest keep running", async ()
 	e.addAgent(rec("b"));
 
 	assert.deepEqual(e.pause(["a"]), ["a"]);
-	assert.equal(e.isPaused(), true); // one paused agent is enough for the UI state line
+	// The SWARM is not stopped by one manual pause; the paused agent is reported separately.
+	assert.equal(e.isPaused(), false);
+	assert.deepEqual(e.pausedAgents(), ["a"]);
 	assert.equal(e.recordTurnStart("a").abort, true);
 	assert.equal(e.recordTurnStart("b").abort, false);
 	assert.deepEqual(await e.route("main", "a", "hi"), { outcome: "buffered", reason: "paused" });
@@ -634,40 +648,47 @@ test("resume(names) releases only those agents and does NOT re-arm the budget", 
 	e.recordTurnStart("a"); // burns budget
 	e.pause();
 
-	assert.deepEqual(e.resume(["a"]), { wasPaused: true, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(["a"]), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
 	assert.equal(e.budget.used, 1, "a named resume must not reset the safety valve");
 	assert.equal(e.get("a")?.paused, false);
 	assert.equal(e.get("b")?.paused, true, "unnamed agents stay paused");
 	assert.equal(e.get("b")?.pausedMidTurn, true);
-	assert.equal(e.isPaused(), true);
+	assert.deepEqual(e.pausedAgents(), ["b"]);
 	const event = e.events.at(-1) as { type: string; names: string[] };
 	assert.deepEqual({ type: event.type, names: event.names }, { type: "resume", names: ["a"] });
 
 	await e.route("main", "a", "back to work");
 	assert.deepEqual(delivered, [createRoutedAgentMessage("main", "back to work")]);
-	assert.deepEqual(e.resume(["ghost"]), { wasPaused: false, bufferedMessages: 0 }, "unknown names resume nothing");
+	assert.deepEqual(
+		e.resume(["ghost"]),
+		{ wasPaused: false, bufferedMessages: 0, budgetRearmed: false },
+		"unknown names resume nothing",
+	);
 });
 
 test("resume(names) is refused while the swarm is budget-paused", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 1 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.recordTurnStart("a"); // reaches the budget -> swarm-wide pause
-	assert.deepEqual(e.resume(["a"]), { wasPaused: false, bufferedMessages: 0, blockedByBudget: true });
+	assert.deepEqual(e.resume(["a"]), {
+		wasPaused: false,
+		bufferedMessages: 0,
+		budgetRearmed: false,
+		blockedByBudget: true,
+	});
 	assert.equal(e.recordTurnStart("a").abort, true, "the budget pause still holds");
 	// Only the full resume re-arms it.
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: true });
 	assert.equal(e.recordTurnStart("a").abort, false);
 });
 
-test("resume() without names clears manual pauses and re-arms the budget", () => {
+test("resume() without names clears every manual pause", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
-	e.recordTurnStart("a");
-	e.pause(["a"]);
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
-	assert.equal(e.get("a")?.paused, false);
-	assert.equal(e.budget.used, 0);
+	e.pause();
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
+	assert.deepEqual(e.pausedAgents(), []);
 	assert.equal(e.isPaused(), false);
 });
 
@@ -724,4 +745,49 @@ test("deliverUser refuses unknown, still-spawning and paused agents instead of d
 	assert.match(refusal("ghost"), /unknown agent/);
 	assert.match(refusal("pending"), /still spawning/);
 	assert.match(refusal("a"), /paused/);
+});
+
+test("a pause that changes nothing emits no event", () => {
+	const e = new Engine(caps);
+	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
+	e.pause(["a"]);
+	const before = e.events.length;
+	assert.deepEqual(e.pause(["a"]), []); // already paused
+	assert.deepEqual(e.pause(["typo"]), []); // unknown name
+	assert.equal(e.events.length, before, "the feed must not show a pause that did not happen");
+});
+
+test("a reservation that completes while paused parks its buffer instead of delivering it", async () => {
+	const e = new Engine(caps);
+	const delivered: RoutedAgentMessage[] = [];
+	e.addAgent(mainRecord());
+	e.reserve("late", "main");
+	await e.route("main", "late", "before the pause"); // buffered in the reservation
+	e.pause(["late"]);
+	await e.route("main", "late", "after the pause"); // buffered in the paused inbox
+	e.attach("late", {
+		model: "test/m",
+		handle: {
+			deliver: async (message) => {
+				delivered.push(message);
+			},
+			abort: async () => {},
+		},
+	});
+	// Delivering here would start a turn that recordTurnStart aborts, losing the messages.
+	assert.deepEqual(delivered, []);
+	assert.deepEqual(e.get("late")?.pausedInbox, [
+		createRoutedAgentMessage("main", "before the pause"),
+		createRoutedAgentMessage("main", "after the pause"),
+	]);
+	e.resume(["late"]);
+	assert.equal(delivered.length, 1); // released as one ordered batch
+});
+
+test("deliverUser refuses 'main': the human is already typing in that chat", () => {
+	const e = new Engine(caps);
+	e.addAgent(mainRecord());
+	const r = e.deliverUser("main", "hi");
+	assert.equal(r.outcome, "refused");
+	assert.match((r as { reason: string }).reason, /main/);
 });
