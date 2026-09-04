@@ -897,8 +897,9 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.registerCommand("subagents-resume", {
     description:
-      "Resume agents by name (empty = all, which also re-arms the turn budget): release buffered " +
-      "messages and retrigger interrupted work. No effect on agents that are already live.",
+      "Resume agents by name (empty = all; re-arms the turn budget if the swarm stopped on it): " +
+      "release buffered messages and retrigger interrupted work. No effect on agents that are " +
+      "already live.",
     handler: async (args, ctx) => {
       const requested = parseNames(args);
       const unknown = unknownNames(requested);
