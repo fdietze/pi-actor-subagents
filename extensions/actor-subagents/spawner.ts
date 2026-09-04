@@ -209,12 +209,10 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 				);
 			},
 			// A human-authored turn, steered in like peer traffic so a busy agent picks it up at its
-			// next turn boundary instead of only when it fully stops. Fire-and-forget for the same
-			// reason as deliver: awaiting it would block the caller until the agent finishes.
+			// next turn boundary instead of only when it fully stops. The promise resolves with the
+			// prompted turn; the engine calls this fire-and-forget and reports a late failure.
 			deliverUser: async (text) => {
-				void Promise.resolve(session.sendUserMessage(text)).catch((e) =>
-					engine.reportError(name, e instanceof Error ? e.message : String(e)),
-				);
+				await session.sendUserMessage(text);
 			},
 			// Bash first: abort() ends the agent loop but a tool already running keeps going, so a
 			// pause that leaves a build or test run alive would not be a pause at all.
