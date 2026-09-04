@@ -213,12 +213,12 @@ test("formatRoster: model id and effective thinking level are shown together", (
 });
 
 test("swarmStateLine: paused buffering vs live with activity count", () => {
-	assert.match(swarmStateLine(true, 3), /PAUSED/);
-	assert.match(swarmStateLine(true, 3), /messages buffer/);
-	assert.match(swarmStateLine(true, 3), /subagents-resume/);
-	assert.match(swarmStateLine(false, 2), /live · 2 working/);
-	assert.match(swarmStateLine(false, 0), /live · idle/);
-	assert.doesNotMatch(swarmStateLine(false, 0), /running/);
+	assert.match(swarmStateLine(true, 3, 0), /PAUSED/);
+	assert.match(swarmStateLine(true, 3, 0), /messages buffer/);
+	assert.match(swarmStateLine(true, 3, 0), /subagents-resume/);
+	assert.match(swarmStateLine(false, 2, 0), /live · 2 working/);
+	assert.match(swarmStateLine(false, 0, 0), /live · idle/);
+	assert.doesNotMatch(swarmStateLine(false, 0, 0), /running/);
 });
 
 test("swarmStateLine: individually paused agents are counted, not reported as a stopped swarm", () => {

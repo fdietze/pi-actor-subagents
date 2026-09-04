@@ -119,7 +119,9 @@ const BUDGET_ESCALATION = (total: number) =>
 // v18: route handles structured custom agent messages instead of user-message text.
 // v19: per-agent manual pause (pause/resume take name lists, pauseSwarm for budget/restored)
 //      + deliverUser (panel input as a real user turn).
-const ENGINE_KEY = "__subagentsEngine_v19";
+// v20: isPaused() is the swarm stop only (+ pausedAgents()); resume re-arms the turn budget
+//      only when it lifts that stop.
+const ENGINE_KEY = "__subagentsEngine_v20";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -645,6 +647,11 @@ export default function subagents(pi: ExtensionAPI) {
   const parseNames = (args: string): string[] =>
     args.split(/[\s,]+/).filter((name) => name.length > 0);
 
+  // Names the human asked for that no agent answers to. Reported by every control command, so a
+  // typo never reads as "nothing to do".
+  const unknownNames = (names: string[]): string[] =>
+    names.filter((name) => !engine.has(name));
+
   // Aborting is fire-and-forget, but a rejected promise with no handler would take pi down.
   const abortAgent = async (name: string): Promise<void> => {
     try {
@@ -786,14 +793,15 @@ export default function subagents(pi: ExtensionAPI) {
     label: "Resume Subagents",
     description:
       "Resume PAUSED agents: release their buffered messages and retrigger their interrupted work. " +
-      "Without names it resumes every agent and re-arms the turn budget; with names it only lifts " +
-      "those agents' manual pause and cannot buy extra budget. Does nothing for agents that are " +
-      "already live. Call it after the swarm pauses on the turn budget to let the group continue.",
+      "Without names it resumes every agent, and re-arms the turn budget if the swarm stopped on " +
+      "it; with names it only lifts those agents' manual pause and cannot buy extra budget. Does " +
+      "nothing for agents that are already live. Call it after the swarm pauses on the turn budget " +
+      "to let the group continue.",
     parameters: Type.Object({
       names: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "Agents to resume; omit or pass an empty list to resume everything and re-arm the budget.",
+            "Agents to resume; omit or pass an empty list to resume everything.",
         }),
       ),
     }),
@@ -872,8 +880,7 @@ export default function subagents(pi: ExtensionAPI) {
       "Pause agents by name (empty = all); their turns stop and new messages buffer until resumed.",
     handler: async (args, ctx) => {
       const requested = parseNames(args);
-      // Named agents that do not exist are reported back: a typo must not read as "nothing to do".
-      const unknown = requested.filter((name) => !engine.has(name));
+      const unknown = unknownNames(requested);
       const paused = engine.pause(requested);
       // Abort AFTER the pause is recorded, so a turn cut here cannot start a successor.
       for (const name of paused) void abortAgent(name);
@@ -893,7 +900,13 @@ export default function subagents(pi: ExtensionAPI) {
       "Resume agents by name (empty = all, which also re-arms the turn budget): release buffered " +
       "messages and retrigger interrupted work. No effect on agents that are already live.",
     handler: async (args, ctx) => {
-      ctx.ui.notify(formatResumeSummary(resumeAgents(parseNames(args))), "info");
+      const requested = parseNames(args);
+      const unknown = unknownNames(requested);
+      const summary = formatResumeSummary(resumeAgents(requested));
+      ctx.ui.notify(
+        unknown.length ? `${summary} · unknown: ${unknown.join(", ")}` : summary,
+        "info",
+      );
     },
   });
 
