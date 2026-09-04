@@ -13,6 +13,12 @@ import type { ThinkingLevel } from "./thinking-level.ts";
 export interface AgentHandle {
 	/** Delivers structured peer traffic; the adapter projects it into Pi's custom message. */
 	deliver(message: RoutedAgentMessage): Promise<void>;
+	/**
+	 * Delivers a human-authored user turn (the panel's chatbox). Absent while the agent is
+	 * still a reservation — no session exists yet to receive a user message, and that absence
+	 * is what makes the "still spawning" case unrepresentable as a silently dropped message.
+	 */
+	deliverUser?(text: string): Promise<void>;
 	/** Aborts this agent's running turn. */
 	abort(): Promise<void>;
 }
@@ -90,6 +96,12 @@ export interface AgentRecord {
 	 * it). Cleared by resume().
 	 */
 	pausedMidTurn?: boolean;
+	/**
+	 * Manual pause of THIS agent (pause()/`/subagents-pause <names>`): its turns are aborted and
+	 * its incoming messages buffer. Separate from the swarm-wide budget pause, so pausing one
+	 * agent cannot silently stop the others.
+	 */
+	paused?: boolean;
 	/** Reservation intermediate state: name taken, session still being created. */
 	pending?: boolean;
 	/** Messages buffered while pending (flushed to the session on attach). */
@@ -118,16 +130,21 @@ export type AgentEvent =
 	// target session: the feed must not claim delivery for something that has not moved yet.
 	| { type: "route"; from: string; to: string; preview: string; buffered: boolean; ts: number }
 	| { type: "turn"; name: string; ts: number }
-	| { type: "pause"; reason: PauseReason; ts: number }
-	| { type: "resume"; ts: number }
+	// `names` is empty when the whole swarm is affected and lists the agents otherwise, so the
+	// feed never claims a swarm-wide stop for a per-agent pause (The Map Is Not the Territory).
+	| { type: "pause"; reason: PauseReason; names: string[]; ts: number }
+	| { type: "resume"; names: string[]; ts: number }
 	| { type: "kill"; name: string; ts: number }
 	| { type: "error"; name: string; reason: string; ts: number };
 
 /**
- * Why the swarm is paused. Only "budget" escalates to 'main' — a manual /agents-pause is the
+ * Why agents are paused. Only "budget" escalates to 'main' — a manual /subagents-pause is the
  * human's own doing, and "restored" is how a rebuilt swarm comes up after a restart.
  */
 export type PauseReason = "manual" | "budget" | "restored";
+
+/** Swarm-wide pause causes: these stop every agent, unlike the per-agent manual pause. */
+export type SwarmPauseReason = Extract<PauseReason, "budget" | "restored">;
 
 export type CheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -144,10 +161,21 @@ export type RouteResult =
 export interface EngineResumeResult {
 	wasPaused: boolean;
 	bufferedMessages: number;
+	/** A named resume was rejected because the swarm-wide budget pause holds everything. */
+	blockedByBudget?: boolean;
 }
+
+/**
+ * Outcome of handing the panel's chatbox text to an agent as a real user turn. A refusal
+ * carries the reason to display; nothing is ever silently dropped.
+ */
+export type DeliverUserResult = { outcome: "delivered" } | { outcome: "refused"; reason: string };
 
 const RESERVED = new Set(["main"]);
 const NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+/** Feed preview of a message body: one short excerpt, never the whole payload. */
+const previewOf = (content: string): string => (content.length > 60 ? `${content.slice(0, 60)}...` : content);
 
 export class Engine {
 	readonly events: AgentEvent[] = [];
@@ -156,8 +184,9 @@ export class Engine {
 	// Graph tracking (in-memory, survives /reload via the singleton, resets on pi restart).
 	private readonly messageEdges = new Map<string, Map<string, number>>(); // from -> (to -> count)
 	private readonly spawnParent = new Map<string, string>(); // child -> parent (main = root, no entry)
-	private paused = false;
-	private pauseReason: PauseReason | undefined;
+	// Swarm-wide pause (budget exhaustion or a restored swarm). Manual pauses live per agent.
+	private budgetPaused = false;
+	private pauseReason: SwarmPauseReason | undefined;
 	private turnsUsed = 0;
 	private readonly caps: Caps;
 
@@ -377,42 +406,89 @@ export class Engine {
 		await Promise.all(records.map((rec) => this.closeRecord(rec)));
 	}
 
+	/** Background agents, optionally narrowed to the given names (unknown names are skipped). */
+	private background(names?: string[]): AgentRecord[] {
+		const all = [...this.agents.values()].filter((rec) => rec.name !== "main");
+		if (!names || names.length === 0) return all;
+		const wanted = new Set(names);
+		return all.filter((rec) => wanted.has(rec.name));
+	}
+
+	/** True when anything is stopped: the swarm-wide budget pause or any manual per-agent pause. */
 	isPaused(): boolean {
-		return this.paused;
+		return this.budgetPaused || this.background().some((rec) => rec.paused === true);
+	}
+
+	/** Is this agent stopped? Either cause blocks its turns and buffers its incoming messages. */
+	private isAgentPaused(rec: AgentRecord): boolean {
+		return this.budgetPaused || rec.paused === true;
 	}
 
 	/**
-	 * Pause the swarm. Marks every agent that is currently mid-turn as `pausedMidTurn` so
-	 * resume can re-trigger their interrupted work; idle agents are left alone. Cause-agnostic:
-	 * covers /agents-pause, the turn budget and a restored swarm uniformly.
+	 * Manually pause agents — all background agents when no names are given, otherwise exactly
+	 * the named ones. Returns the agents that were not already paused, so the caller can abort
+	 * their running turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers
+	 * that interrupted work; idle agents are left alone.
 	 */
-	pause(reason: PauseReason = "manual"): void {
-		this.paused = true;
-		this.pauseReason = reason;
-		for (const rec of this.agents.values()) {
+	pause(names?: string[]): string[] {
+		const swarmWide = !names || names.length === 0;
+		const newlyPaused: string[] = [];
+		for (const rec of this.background(names)) {
+			if (rec.paused) continue;
+			rec.paused = true;
+			newlyPaused.push(rec.name);
 			// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
-			if (rec.name !== "main" && rec.activity !== undefined) rec.pausedMidTurn = true;
+			if (rec.activity !== undefined) rec.pausedMidTurn = true;
 		}
-		this.emit({ type: "pause", reason, ts: Date.now() });
+		this.emit({ type: "pause", reason: "manual", names: swarmWide ? [] : newlyPaused, ts: Date.now() });
+		return newlyPaused;
 	}
 
 	/**
-	 * Resume a paused swarm. A no-op when the swarm is already live: re-arming the budget
-	 * there would silently reset the safety valve, so any caller could poll it away
-	 * (Inversion: the failure mode to exclude is a swarm that never reaches its budget stop).
+	 * Stop the whole swarm for a cause that is not the human's per-agent choice: the turn budget
+	 * ran out, or a restored swarm comes up stopped. Kept separate from pause() because only this
+	 * state re-arms on resume and only "budget" escalates to 'main'.
 	 */
-	resume(): EngineResumeResult {
-		if (!this.paused) return { wasPaused: false, bufferedMessages: 0 };
-		let bufferedMessages = 0;
-		const wasPaused = true;
-		this.paused = false;
-		this.pauseReason = undefined;
-		this.turnsUsed = 0;
-		for (const rec of this.agents.values()) rec.pausedMidTurn = false;
+	pauseSwarm(reason: SwarmPauseReason): void {
+		this.budgetPaused = true;
+		this.pauseReason = reason;
+		for (const rec of this.background()) {
+			if (rec.activity !== undefined) rec.pausedMidTurn = true;
+		}
+		this.emit({ type: "pause", reason, names: [], ts: Date.now() });
+	}
 
-		// Release paused inboxes in FIFO order. Delivery is intentionally fire-and-forget,
-		// so the result counts released messages rather than claiming they completed.
-		for (const rec of this.agents.values()) {
+	/**
+	 * Resume agents. Without names this is the "resume everything" verb: it re-arms the turn
+	 * budget, clears every pause and releases every buffered inbox. It is a no-op when nothing
+	 * is paused — re-arming a live swarm would silently reset the safety valve, so any caller
+	 * could poll it away (Inversion: exclude a swarm that never reaches its budget stop).
+	 *
+	 * With names it clears only those agents' manual pause and deliberately does NOT re-arm the
+	 * budget. While the budget pause holds it does nothing at all and says so: releasing one
+	 * agent's inbox then would hand it work that recordTurnStart immediately aborts, leaving the
+	 * message unprocessed in its transcript with nobody re-triggering it.
+	 */
+	resume(names?: string[]): EngineResumeResult {
+		const swarmWide = !names || names.length === 0;
+		if (swarmWide) {
+			if (!this.isPaused()) return { wasPaused: false, bufferedMessages: 0 };
+			this.budgetPaused = false;
+			this.pauseReason = undefined;
+			this.turnsUsed = 0;
+		} else {
+			if (this.budgetPaused) return { wasPaused: false, bufferedMessages: 0, blockedByBudget: true };
+			if (!this.background(names).some((rec) => rec.paused === true))
+				return { wasPaused: false, bufferedMessages: 0 };
+		}
+
+		let bufferedMessages = 0;
+		const released = this.background(names);
+		for (const rec of released) {
+			rec.paused = false;
+			rec.pausedMidTurn = false;
+			// Release paused inboxes in FIFO order. Delivery is intentionally fire-and-forget,
+			// so the result counts released messages rather than claiming they completed.
 			const inbox = rec.pausedInbox;
 			if (inbox && inbox.length > 0) {
 				rec.pausedInbox = undefined;
@@ -423,30 +499,55 @@ export class Engine {
 			}
 		}
 
-		this.emit({ type: "resume", ts: Date.now() });
-		return { wasPaused, bufferedMessages };
+		this.emit({ type: "resume", names: swarmWide ? [] : released.map((rec) => rec.name), ts: Date.now() });
+		return { wasPaused: true, bufferedMessages };
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {
 		const target = this.agents.get(to);
 		if (!target) return { outcome: "failed", reason: `unknown agent '${to}'` };
 		const message = createRoutedAgentMessage(from, content);
-		// One tail for both outcomes: a paused swarm parks the message, a live one hands it over.
+		// One tail for both outcomes: a paused target parks the message, a live one takes it.
 		// Everything after that (edge count, activity, feed event) is identical, so it is written once.
-		const buffered = this.paused;
+		const buffered = this.isAgentPaused(target);
 		if (buffered) (target.pausedInbox ??= []).push(message);
 		else await target.handle.deliver(message);
 		target.lastActivity = Date.now();
-		// Count the message edge for the relationship graph.
+		this.countEdge(from, to);
+		this.emit({ type: "route", from, to, preview: previewOf(content), buffered, ts: Date.now() });
+		return buffered ? { outcome: "buffered", reason: "paused" } : { outcome: "delivered" };
+	}
+
+	/**
+	 * Deliver panel-typed text to an agent as a real user turn (not peer traffic), reported
+	 * through the same feed and message graph as a route so the human's input stays visible.
+	 * Refuses instead of buffering: user text has no place in the paused inbox (which carries
+	 * structured peer messages), and a paused agent would abort the triggered turn and leave the
+	 * text unread with nobody to re-trigger it.
+	 */
+	deliverUser(to: string, text: string): DeliverUserResult {
+		const target = this.agents.get(to);
+		if (!target) return { outcome: "refused", reason: `unknown agent '${to}'` };
+		if (!target.handle.deliverUser) return { outcome: "refused", reason: `'${to}' is still spawning` };
+		if (this.isAgentPaused(target))
+			return { outcome: "refused", reason: `'${to}' is paused — resume it first` };
+		void target.handle.deliverUser(text).catch((error) => {
+			this.reportError(to, error instanceof Error ? error.message : String(error));
+		});
+		target.lastActivity = Date.now();
+		this.countEdge("main", to);
+		this.emit({ type: "route", from: "main", to, preview: previewOf(text), buffered: false, ts: Date.now() });
+		return { outcome: "delivered" };
+	}
+
+	/** Count one message edge for the relationship graph. */
+	private countEdge(from: string, to: string): void {
 		let targets = this.messageEdges.get(from);
 		if (!targets) {
 			targets = new Map<string, number>();
 			this.messageEdges.set(from, targets);
 		}
 		targets.set(to, (targets.get(to) ?? 0) + 1);
-		const preview = content.length > 60 ? `${content.slice(0, 60)}...` : content;
-		this.emit({ type: "route", from, to, preview, buffered, ts: Date.now() });
-		return buffered ? { outcome: "buffered", reason: "paused" } : { outcome: "delivered" };
 	}
 
 	/** Adjacency matrix of message counts: from -> (to -> count). Plain snapshot copy. */
@@ -465,14 +566,14 @@ export class Engine {
 
 	/** Call before every background turn. abort=true => caller must call session.abort(). */
 	recordTurnStart(name: string): { abort: boolean; reason?: string } {
-		if (this.paused) {
+		const rec = this.agents.get(name);
+		if (this.budgetPaused || rec?.paused) {
 			return {
 				abort: true,
 				reason: this.pauseReason === "budget" ? `turn budget exhausted (${this.caps.turnBudget})` : "agents paused",
 			};
 		}
 		this.turnsUsed++;
-		const rec = this.agents.get(name);
 		if (rec) {
 			rec.turns++;
 			rec.lastActivity = Date.now();
@@ -483,7 +584,7 @@ export class Engine {
 		// This stops agents at clean turn boundaries instead of cutting an in-flight turn.
 		// pi's SDK exposes no "stop after current turn" hook (agent-core shouldStopAfterTurn
 		// is internal), so blocking the next turn_start is the closest reachable equivalent.
-		if (this.turnsUsed >= this.caps.turnBudget) this.pause("budget");
+		if (this.turnsUsed >= this.caps.turnBudget) this.pauseSwarm("budget");
 		return { abort: false };
 	}
 

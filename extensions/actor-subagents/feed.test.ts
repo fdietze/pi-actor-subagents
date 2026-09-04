@@ -148,7 +148,7 @@ test("formatFeedLines renders one line per event newest-aware", () => {
 	const events: AgentEvent[] = [
 		{ type: "spawn", name: "coder", by: "main", ts: 0 },
 		{ type: "route", from: "main", to: "coder", preview: "do x", buffered: false, ts: 0 },
-		{ type: "pause", reason: "manual", ts: 0 },
+		{ type: "pause", reason: "manual", names: [], ts: 0 },
 		{ type: "error", name: "coder", reason: "boom", ts: 0 },
 	];
 	const lines = formatFeedLines(events);
@@ -158,6 +158,17 @@ test("formatFeedLines renders one line per event newest-aware", () => {
 	assert.match(lines[2], /pause.*manual/i);
 	assert.match(lines[3], /error.*coder.*boom/);
 	assert.doesNotMatch(lines[1], /buffered/);
+});
+
+test("formatFeedLines names the agents of a per-agent pause/resume", () => {
+	const lines = formatFeedLines([
+		{ type: "pause", reason: "manual", names: ["coder", "tester"], ts: 0 },
+		{ type: "resume", names: ["coder"], ts: 0 },
+		{ type: "resume", names: [], ts: 0 },
+	]);
+	assert.match(lines[0], /pause\s+coder, tester \(manual\)/);
+	assert.match(lines[1], /resume\s+coder/);
+	assert.match(lines[2], /swarm live/);
 });
 
 test("formatFeedLines does not present main as spawned by itself", () => {
@@ -201,6 +212,11 @@ test("formatResumeSummary reports scheduler, released buffer, retriggers, and bu
 	assert.equal(
 		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0 }),
 		"agents already live · nothing to resume",
+	);
+	// A named resume cannot lift the swarm-wide budget stop; say what actually helps.
+	assert.match(
+		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, blockedByBudget: true }),
+		/turn budget/,
 	);
 });
 

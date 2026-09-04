@@ -27,7 +27,14 @@ export interface SessionLike {
 		message: RoutedAgentMessage,
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void> | void;
+	/** Deliver a real user-role turn (the panel's chatbox types AS the human, not as a peer). */
+	sendUserMessage(text: string): Promise<void> | void;
 	abort(): Promise<void> | void;
+	/**
+	 * Cancel a running bash command. abort() alone stops the agent loop but leaves an in-flight
+	 * bash running, so every abort path pairs the two to actually stop the work.
+	 */
+	abortBash(): Promise<void> | void;
 	/** Emit child extension session_shutdown before disposal. */
 	shutdown(): Promise<void> | void;
 	/** Permanently release the SDK session's listeners and resources. */
@@ -120,6 +127,9 @@ function createSessionCloser(session: SessionLike, detach: () => void = () => {}
 					failure ??= error;
 				}
 			};
+			// Bash before abort: abort() waits for the session to go idle, which a running bash
+			// command would otherwise stretch out for as long as it takes.
+			await attempt(() => session.abortBash());
 			await attempt(() => session.abort());
 			await attempt(detach);
 			await attempt(() => session.shutdown());
@@ -198,7 +208,18 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 					engine.reportError(name, e instanceof Error ? e.message : String(e)),
 				);
 			},
+			// A human-authored turn, steered in like peer traffic so a busy agent picks it up at its
+			// next turn boundary instead of only when it fully stops. Fire-and-forget for the same
+			// reason as deliver: awaiting it would block the caller until the agent finishes.
+			deliverUser: async (text) => {
+				void Promise.resolve(session.sendUserMessage(text)).catch((e) =>
+					engine.reportError(name, e instanceof Error ? e.message : String(e)),
+				);
+			},
+			// Bash first: abort() ends the agent loop but a tool already running keeps going, so a
+			// pause that leaves a build or test run alive would not be a pause at all.
 			abort: async () => {
+				await session.abortBash();
 				await session.abort();
 			},
 		};

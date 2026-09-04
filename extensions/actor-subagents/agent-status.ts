@@ -21,8 +21,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 /**
  * The four mutually exclusive things an agent can be, in precedence order:
- * spawning (session still starting) · paused (stopped mid-turn, awaiting resume) ·
- * working (a turn is running) · idle (turn finished, waiting for input).
+ * spawning (session still starting) · paused (manually paused, or stopped mid-turn, awaiting
+ * resume) · working (a turn is running) · idle (turn finished, waiting for input).
  * `outcome` reports a noteworthy terminal reason of the finished turn.
  */
 export type AgentStatus =
@@ -38,6 +38,8 @@ export interface StatusInputs {
 	activity?: AgentActivity;
 	currentTool?: string;
 	pausedMidTurn?: boolean;
+	/** Manually paused: it runs nothing until resumed, so "idle" would misread as ready. */
+	paused?: boolean;
 	stopReason?: StopReason;
 }
 
@@ -47,7 +49,7 @@ export interface StatusInputs {
  */
 export function agentStatus(r: StatusInputs): AgentStatus {
 	if (r.pending) return { kind: "spawning" };
-	if (r.pausedMidTurn) return { kind: "paused" };
+	if (r.paused || r.pausedMidTurn) return { kind: "paused" };
 	if (!r.activity) {
 		// Idle: surface a noteworthy terminal outcome of the last turn, else plain idle.
 		if (r.stopReason === "error") return { kind: "idle", outcome: "error" };

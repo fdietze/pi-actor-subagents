@@ -5,7 +5,6 @@ import {
 	formatRoster,
 	moveSelection,
 	transcriptViewport,
-	chatboxToRoute,
 	messageText,
 	toolCalls,
 	shortModel,
@@ -172,10 +171,22 @@ test("formatRoster: custom status capped at 32 with a trailing ellipsis", () => 
 	assert.doesNotMatch(row, /x{33}/);
 });
 
-test("formatRoster: ▸ cursor on the selected row only", () => {
+test("formatRoster: rows are flush left — no cursor indent column", () => {
 	const rows = formatRoster([re({ name: "a" }), re({ name: "b" })], 200, { selectedIndex: 1 });
-	assert.match(rows[1], /^▸ /);
-	assert.match(rows[0], /^ {2}/); // space cursor + gap → two leading spaces
+	assert.match(rows[0], /^a/);
+	assert.match(rows[1], /^b/);
+});
+
+test("formatRoster: the selected row is styled as a whole and keeps its status cell plain", () => {
+	const rows = formatRoster([re({ name: "a" }), re({ name: "b", status: { kind: "working", phase: "thinking" } })], 200, {
+		selectedIndex: 1,
+		styleStatus: (l, tone) => `[${tone}]${l}`,
+		styleSelected: (line) => `<${line}>`,
+	});
+	assert.match(rows[0], /\[idle\]/); // unselected rows still get the status tone
+	assert.match(rows[1], /^<b/);
+	assert.doesNotMatch(rows[1], /\[busy\]/); // a status background would end the row highlight early
+	assert.match(rows[1], />$/);
 });
 
 test("formatRoster: tone keys off the system status — idle stays idle despite a custom status", () => {
@@ -250,12 +261,6 @@ test("transcriptViewport takes what the chrome leaves, with a floor", () => {
 	assert.equal(transcriptViewport(40, 12), 28);
 	assert.equal(transcriptViewport(10, 12), 3); // chrome alone overflows -> floor
 	assert.equal(transcriptViewport(10, 12, 5), 5);
-});
-
-test("chatboxToRoute maps selected agent + text, rejects empty", () => {
-	assert.deepEqual(chatboxToRoute("echo", "ping"), { to: "echo", content: "ping" });
-	assert.equal(chatboxToRoute("echo", "   "), null);
-	assert.equal(chatboxToRoute(undefined, "ping"), null);
 });
 
 test("messageText extracts string or text parts", () => {

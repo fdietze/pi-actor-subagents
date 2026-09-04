@@ -153,14 +153,20 @@ interface ColSpec {
 
 /**
  * Render the whole roster as aligned single-line rows (one string per agent, in input order).
- * `opts.selectedIndex` draws the ▸ cursor on that row (panel only; omit for the widget).
+ * Rows start flush left; selection is a whole-row treatment via `opts.styleSelected` on
+ * `opts.selectedIndex` (panel only — the widget passes neither), not an indent column.
  * `opts.styleStatus` tones the system-status cell. Lines may still exceed `width` in the
  * degenerate case where the protected columns alone overflow — the caller's truncateToWidth clips.
  */
 export function formatRoster(
 	entries: RosterEntry[],
 	width: number,
-	opts: { selectedIndex?: number; styleStatus?: (label: string, tone: StatusTone) => string } = {},
+	opts: {
+		selectedIndex?: number;
+		styleStatus?: (label: string, tone: StatusTone) => string;
+		/** Applied to the selected row as a whole (e.g. a background highlight). */
+		styleSelected?: (line: string) => string;
+	} = {},
 ): string[] {
 	const styleStatus = opts.styleStatus ?? ((l) => l);
 	// The ETA column exists only when at least one agent has set an ETA (otherwise wasted space).
@@ -190,9 +196,8 @@ export function formatRoster(
 	let visible = cols.filter((c) => c.collapseRank === 0 || (widthOf.get(c.key) ?? 0) > 0);
 
 	const GAP = 1; // single space between columns
-	const PREFIX = 2; // cursor + space
 	const lineWidth = (set: ColSpec[]) =>
-		PREFIX + set.reduce((sum, c) => sum + (widthOf.get(c.key) ?? 0), 0) + GAP * Math.max(0, set.length - 1);
+		set.reduce((sum, c) => sum + (widthOf.get(c.key) ?? 0), 0) + GAP * Math.max(0, set.length - 1);
 
 	// Collapse the lowest-priority column until the row fits; protected columns are never dropped.
 	while (lineWidth(visible) > width) {
@@ -204,14 +209,17 @@ export function formatRoster(
 	}
 
 	return entries.map((e, i) => {
-		const cursor = opts.selectedIndex === i ? "▸" : " ";
+		const selected = opts.selectedIndex === i;
 		const cells = visible.map((c) => {
 			const w = widthOf.get(c.key) ?? 0;
 			const fitted = (c.fit === "middle" ? fitMiddle : fitEnd)(c.cellOf(e), w).padEnd(w);
 			// Tone styling keys off the SYSTEM status only, applied after padding so widths stay exact.
-			return c.key === "status" ? styleStatus(fitted, statusTone(e.status)) : fitted;
+			// The selected row is left plain: a background inside it ends with a background reset,
+			// which would cut the row highlight in half.
+			return c.key === "status" && !selected ? styleStatus(fitted, statusTone(e.status)) : fitted;
 		});
-		return `${cursor} ${cells.join(" ")}`.replace(/ +$/, "");
+		const line = cells.join(" ").replace(/ +$/, "");
+		return selected && opts.styleSelected ? opts.styleSelected(line) : line;
 	});
 }
 
@@ -347,11 +355,4 @@ export function toolCalls(m: { role?: string; content?: unknown }): ToolCallPart
 			.map((p) => ({ id: p.id ?? "", name: p.name ?? "tool", arguments: p.arguments }));
 	}
 	return [];
-}
-
-export function chatboxToRoute(selected: string | undefined, text: string): { to: string; content: string } | null {
-	if (!selected) return null;
-	const content = text.trim();
-	if (!content) return null;
-	return { to: selected, content };
 }

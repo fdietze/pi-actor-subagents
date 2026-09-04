@@ -39,3 +39,9 @@ test("formatStatus renders the roster label for every status", () => {
 	assert.equal(formatStatus({ kind: "idle", outcome: "error" }), "error");
 	assert.equal(formatStatus({ kind: "idle", outcome: "truncated" }), "truncated");
 });
+
+test("a manually paused agent reads as paused, not idle", () => {
+	assert.deepEqual(agentStatus({ paused: true }), { kind: "paused" });
+	// Spawning still wins: there is no session to pause yet.
+	assert.deepEqual(agentStatus({ paused: true, pending: true }), { kind: "spawning" });
+});

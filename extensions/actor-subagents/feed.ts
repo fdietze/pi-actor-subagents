@@ -98,10 +98,11 @@ export function formatFeedLines(events: AgentEvent[]): string[] {
 				return `route   ${e.from} -> ${e.to}${e.buffered ? " (buffered)" : ""}: ${e.preview}`;
 			case "turn":
 				return `turn    ${e.name}`;
+			// Named agents mean a per-agent pause/resume; an empty list means the whole swarm.
 			case "pause":
-				return `pause   (swarm paused: ${e.reason})`;
+				return e.names.length ? `pause   ${e.names.join(", ")} (${e.reason})` : `pause   (swarm paused: ${e.reason})`;
 			case "resume":
-				return `resume  (swarm live)`;
+				return e.names.length ? `resume  ${e.names.join(", ")}` : `resume  (swarm live)`;
 			case "kill":
 				return `kill    ${e.name}`;
 			case "error":
@@ -157,6 +158,8 @@ export interface ResumeSummary {
 	wasPaused: boolean;
 	bufferedMessages: number;
 	retriggered: number;
+	/** A named resume hit the swarm-wide budget pause, which only a full resume can re-arm. */
+	blockedByBudget?: boolean;
 }
 
 /**
@@ -167,6 +170,8 @@ export interface ResumeSummary {
  * "budget re-armed" claimed work that did not happen, so that case gets its own short line.
  */
 export function formatResumeSummary(summary: ResumeSummary): string {
+	if (summary.blockedByBudget)
+		return "swarm is paused on the turn budget · /agents-resume without names to re-arm and continue";
 	if (!summary.wasPaused) return "agents already live · nothing to resume";
 	const noun = summary.retriggered === 1 ? "agent" : "agents";
 	return [

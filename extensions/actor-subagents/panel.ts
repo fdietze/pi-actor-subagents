@@ -49,7 +49,6 @@ import {
 
 interface PanelDeps {
 	engine: Engine;
-	route: (to: string, content: string) => void;
 	cwd: string;
 	/** Hide assistant thinking blocks, aligned with the main UI's hideThinkingBlock setting. */
 	hideThinking: boolean;
@@ -210,11 +209,14 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			return;
 		}
 		notice = undefined;
-		if (to && text) {
-			deps.route(to, text);
-			editor.setText("");
-			refresh();
-		}
+		if (!to || !text) return;
+		// The chatbox types AS THE HUMAN: the agent receives a real user turn, not peer traffic
+		// labelled "message from main". A refusal (paused, still spawning) keeps the text in the
+		// editor so nothing the human wrote is lost.
+		const result = deps.engine.deliverUser(to, text);
+		if (result.outcome === "refused") notice = result.reason;
+		else editor.setText("");
+		refresh();
 	};
 
 	// Retune the selected agent. Fire-and-forget: the retune awaits the child session, and
@@ -390,7 +392,13 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 					targets: formatSendTargets(matrix, a.name),
 				})),
 				width,
-				{ styleStatus: styler, selectedIndex },
+				{
+					styleStatus: styler,
+					selectedIndex,
+					// Selection is a full-row highlight instead of a cursor glyph, so the roster starts
+					// flush left and no width is spent on an indent column.
+					styleSelected: (line) => theme.bg("selectedBg", line.padEnd(width)),
+				},
 			)) {
 				lines.push(truncateToWidth(line, width));
 			}

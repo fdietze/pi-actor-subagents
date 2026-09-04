@@ -6,6 +6,7 @@ import { createSpawner, type SessionLike, type ThinkingLevel } from "./spawner.t
 
 class FakeSession implements SessionLike {
 	delivered: RoutedAgentMessage[] = [];
+	userMessages: string[] = [];
 	aborted = 0;
 	messages: unknown[] = [];
 	lastDeliverAs: string | undefined;
@@ -28,9 +29,15 @@ class FakeSession implements SessionLike {
 		this.delivered.push(message);
 		this.lastDeliverAs = options?.deliverAs;
 	}
+	async sendUserMessage(text: string) {
+		this.userMessages.push(text);
+	}
 	async abort() {
 		this.aborted++;
 		this.lifecycle.push("abort");
+	}
+	abortBash() {
+		this.lifecycle.push("abortBash");
 	}
 	async shutdown() {
 		this.lifecycle.push("shutdown");
@@ -113,7 +120,7 @@ test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
 	assert.deepEqual(blocked, { outcome: "buffered", reason: "paused" });
 });
 
-test("spawn reports an initial message as buffered while agents are paused", async () => {
+test("spawn reports an initial message as buffered while the swarm-wide pause holds", async () => {
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
 	withMain(engine, []);
 	const session = new FakeSession();
@@ -122,7 +129,9 @@ test("spawn reports an initial message as buffered while agents are paused", asy
 		resolveModel: () => ({ provider: "test", id: "m", model: {} }),
 		createSession: async () => ({ session }),
 	});
-	engine.pause();
+	// A restored (or budget-stopped) swarm blocks every agent, including ones spawned afterwards.
+	// A manual pause names existing agents instead, so it deliberately does not cover new ones.
+	engine.pauseSwarm("restored");
 
 	const result = await spawner.spawnAgent(
 		{ name: "waiting", systemPrompt: "wait", message: "start later" },
@@ -355,7 +364,7 @@ test("spawn enforces max depth via spawner depth", async () => {
 	assert.match(tooDeep.msg, /depth/i);
 });
 
-test("kill closes a child session exactly once in abort-detach-shutdown-dispose order", async () => {
+test("kill closes a child session exactly once in abortBash-abort-detach-shutdown-dispose order", async () => {
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
 	withMain(engine, []);
 	const session = new FakeSession();
@@ -372,7 +381,7 @@ test("kill closes a child session exactly once in abort-detach-shutdown-dispose 
 	const result = await engine.kill("child");
 
 	assert.equal(result.ok, true);
-	assert.deepEqual(session.lifecycle, ["abort", "detach", "shutdown", "dispose"]);
+	assert.deepEqual(session.lifecycle, ["abortBash", "abort", "detach", "shutdown", "dispose"]);
 });
 
 test("a child killed while session creation is pending closes the orphan runtime", async () => {
@@ -397,7 +406,7 @@ test("a child killed while session creation is pending closes the orphan runtime
 
 	assert.equal(result.ok, false);
 	assert.equal(engine.has("child"), false);
-	assert.deepEqual(session.lifecycle, ["abort", "shutdown", "dispose"]);
+	assert.deepEqual(session.lifecycle, ["abortBash", "abort", "shutdown", "dispose"]);
 });
 
 test("a spawned agent can be retuned in place, and the roster adopts the session's level", async () => {
@@ -422,4 +431,35 @@ test("a spawned agent can be retuned in place, and the roster adopts the session
 	assert.deepEqual(sessions.get("echo")?.models, [opus]);
 	assert.equal(engine.get("echo")?.model, "test/opus");
 	assert.equal(engine.get("echo")?.thinkingLevel, "low");
+});
+
+test("aborting an agent interrupts its running bash before stopping the agent loop", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	withMain(engine, []);
+	const session = new FakeSession();
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "child", systemPrompt: "r" }, "main");
+	// This is the path /subagents-pause and the per-agent pause take.
+	await engine.get("child")?.handle.abort();
+	assert.deepEqual(session.lifecycle, ["abortBash", "abort"]);
+});
+
+test("panel input reaches the child as a real user message", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	withMain(engine, []);
+	const session = new FakeSession();
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "child", systemPrompt: "r" }, "main");
+	assert.deepEqual(engine.deliverUser("child", "try the other approach"), { outcome: "delivered" });
+	await Promise.resolve();
+	assert.deepEqual(session.userMessages, ["try the other approach"]);
+	assert.deepEqual(session.delivered, [], "user text must not be projected as peer traffic");
 });

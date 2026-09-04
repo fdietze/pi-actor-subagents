@@ -33,7 +33,9 @@ import { parseChildExtensionPolicy } from "./child-extension-policy.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
 import {
   formatFeedLines,
+  formatKillResult,
   formatResumeSummary,
+  type KillOutcome,
   type ResumeSummary,
 } from "./feed.ts";
 import {
@@ -114,7 +116,9 @@ const BUDGET_ESCALATION = (total: number) =>
 //      route events carry `buffered`.
 // v17: Engine.retune + AgentRecord.reconfigure (live model/effort change).
 // v18: route handles structured custom agent messages instead of user-message text.
-const ENGINE_KEY = "__subagentsEngine_v18";
+// v19: per-agent manual pause (pause/resume take name lists, pauseSwarm for budget/restored)
+//      + deliverUser (panel input as a real user turn).
+const ENGINE_KEY = "__subagentsEngine_v19";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -481,7 +485,12 @@ export default function subagents(pi: ExtensionAPI) {
           triggerTurn: true,
           deliverAs: options?.deliverAs,
         }),
+      // Same steer semantics as peer traffic: a busy agent picks the human's text up at its next
+      // turn boundary rather than only after it fully stops.
+      sendUserMessage: (text) =>
+        session.sendUserMessage(text, { deliverAs: "steer" }),
       abort: () => session.abort(),
+      abortBash: () => session.abortBash(),
       shutdown: async () => {
         const runner = session.extensionRunner;
         if (runner.hasHandlers("session_shutdown")) {
@@ -602,21 +611,34 @@ export default function subagents(pi: ExtensionAPI) {
     }
     // Present the restored swarm as paused: one resume_agents()/`/agents-resume` reactivates it.
     // "restored" is its own reason so it never escalates to main like a budget pause.
-    if (restored > 0) engine.pause("restored");
+    if (restored > 0) engine.pauseSwarm("restored");
   };
 
-  // Shared by /agents-resume and the resume_agents tool: re-arm the budget, unpause,
-  // release buffered messages, and re-trigger only interrupted agents.
-  const resumeAgents = (): ResumeSummary => {
+  // Shared by /agents-resume and the resume_agents tool: unpause the named agents (all of them
+  // when no names are given, which also re-arms the budget), release their buffered messages and
+  // re-trigger only the interrupted ones. Nothing is re-triggered when the resume did not happen
+  // (already live, or a named resume held back by the swarm-wide budget pause).
+  const resumeAgents = (names?: string[]): ResumeSummary => {
+    const wanted = names && names.length > 0 ? new Set(names) : undefined;
     const interrupted = engine
       .list()
-      .filter((a) => a.name !== "main" && a.pausedMidTurn)
+      .filter(
+        (a) => a.name !== "main" && a.pausedMidTurn && (!wanted || wanted.has(a.name)),
+      )
       .map((a) => a.name);
-    const resumed = engine.resume();
+    const resumed = engine.resume(names);
+    if (!resumed.wasPaused) {
+      updateStatus();
+      return { ...resumed, retriggered: 0 };
+    }
     for (const name of interrupted) void engine.route("main", name, RESUME_NUDGE);
     updateStatus();
     return { ...resumed, retriggered: interrupted.length };
   };
+
+  // Swarm control commands take an optional agent-name list; empty means "all of them".
+  const parseNames = (args: string): string[] =>
+    args.split(/[\s,]+/).filter((name) => name.length > 0);
 
   // Capture the foreground model (for inheritance to spawned agents).
   pi.on("model_select", (event) => {
@@ -746,12 +768,20 @@ export default function subagents(pi: ExtensionAPI) {
     name: "resume_agents",
     label: "Resume Agents",
     description:
-      "Resume a PAUSED swarm: release buffered messages, retrigger interrupted work and re-arm " +
-      "the turn budget. Does nothing while agents are live — it cannot buy extra budget mid-run. " +
-      "Call it after the swarm pauses on the turn budget to let the group continue.",
-    parameters: Type.Object({}),
-    execute: async () => {
-      const summary = resumeAgents();
+      "Resume PAUSED agents: release their buffered messages and retrigger their interrupted work. " +
+      "Without names it resumes every agent and re-arms the turn budget; with names it only lifts " +
+      "those agents' manual pause and cannot buy extra budget. Does nothing for agents that are " +
+      "already live. Call it after the swarm pauses on the turn budget to let the group continue.",
+    parameters: Type.Object({
+      names: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Agents to resume; omit or pass an empty list to resume everything and re-arm the budget.",
+        }),
+      ),
+    }),
+    execute: async (_id, args) => {
+      const summary = resumeAgents(args.names);
       return {
         content: [{ type: "text", text: formatResumeSummary(summary) }],
         details: summary,
@@ -782,7 +812,6 @@ export default function subagents(pi: ExtensionAPI) {
               hideThinking,
               toolsExpanded,
               setToolsExpanded: (v) => ctx.ui.setToolsExpanded?.(v),
-              route: (to, content) => void engine.route("main", to, content),
               listModels,
               setAgentModel: (spec) =>
                 setAgentModel(spec as Parameters<typeof setAgentModel>[0]),
@@ -822,14 +851,16 @@ export default function subagents(pi: ExtensionAPI) {
   // Every swarm control command shares the /agents- prefix, so typing it lists the whole
   // control surface and none collides with a pi built-in (/resume continues a chat session).
   pi.registerCommand("agents-pause", {
-    description: "Pause all agents; new messages buffer until resumed.",
-    handler: async (_args, ctx) => {
-      engine.pause();
-      for (const a of engine.list()) {
-        if (a.name !== "main") void a.handle.abort();
-      }
+    description:
+      "Pause agents by name (empty = all); their turns stop and new messages buffer until resumed.",
+    handler: async (args, ctx) => {
+      const paused = engine.pause(parseNames(args));
+      // Abort AFTER the pause is recorded, so a turn cut here cannot start a successor.
+      for (const name of paused) void engine.get(name)?.handle.abort();
       ctx.ui.notify(
-        "Agents PAUSED; new messages will buffer. Use /agents-resume to continue.",
+        paused.length
+          ? `PAUSED ${paused.join(", ")}; new messages will buffer. Use /agents-resume to continue.`
+          : "No agents to pause.",
         "warning",
       );
       updateStatus();
@@ -838,22 +869,27 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.registerCommand("agents-resume", {
     description:
-      "Resume a paused swarm: release buffered messages, retrigger interrupted work and re-arm " +
-      "the turn budget. No effect while agents are live.",
-    handler: async (_args, ctx) => {
-      ctx.ui.notify(formatResumeSummary(resumeAgents()), "info");
+      "Resume agents by name (empty = all, which also re-arms the turn budget): release buffered " +
+      "messages and retrigger interrupted work. No effect on agents that are already live.",
+    handler: async (args, ctx) => {
+      ctx.ui.notify(formatResumeSummary(resumeAgents(parseNames(args))), "info");
     },
   });
 
   pi.registerCommand("agents-kill-all", {
-    description: "Terminate all agents (except 'main').",
-    handler: async (_args, ctx) => {
-      const killed = await engine.killAll();
+    description: "Terminate agents by name (empty = all except 'main').",
+    handler: async (args, ctx) => {
+      const names = parseNames(args);
+      // Named kills report per target (each cascades to its subtree); without names the whole
+      // swarm goes down and killAll already returns the flat list of what it took.
+      const results: KillOutcome[] = names.length
+        ? await Promise.all(
+            names.map(async (target) => ({ target, ...(await engine.kill(target)) })),
+          )
+        : (await engine.killAll()).map((name) => ({ target: name, ok: true }));
       persistRoster();
       ctx.ui.notify(
-        killed.length
-          ? `Killed ${killed.length} agent(s): ${killed.join(", ")}`
-          : "No agents to kill.",
+        results.length ? formatKillResult(results) : "No agents to kill.",
         "info",
       );
       updateStatus();
