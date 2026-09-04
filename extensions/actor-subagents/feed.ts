@@ -82,7 +82,7 @@ export function formatSnapshot(
 		);
 	});
 	const scheduler = paused
-		? `agents (budget ${turnsUsed}/${turnBudget}; PAUSED — messages are buffering; /agents-resume to continue):`
+		? `agents (budget ${turnsUsed}/${turnBudget}; PAUSED — messages are buffering; /subagents-resume to continue):`
 		: `agents (budget ${turnsUsed}/${turnBudget}):`;
 	return [scheduler, ...rows].join("\n");
 }
@@ -125,7 +125,7 @@ export function normalizeTargets(to: string[]): string[] {
 	return out;
 }
 
-/** Per-target result of a batch kill (kill_agent takes an array of names). */
+/** Per-target result of a batch kill (kill_subagent takes an array of names). */
 export interface KillOutcome {
 	target: string;
 	ok: boolean;
@@ -171,7 +171,7 @@ export interface ResumeSummary {
  */
 export function formatResumeSummary(summary: ResumeSummary): string {
 	if (summary.blockedByBudget)
-		return "swarm is paused on the turn budget · /agents-resume without names to re-arm and continue";
+		return "swarm is paused on the turn budget · /subagents-resume without names to re-arm and continue";
 	if (!summary.wasPaused) return "agents already live · nothing to resume";
 	const noun = summary.retriggered === 1 ? "agent" : "agents";
 	return [

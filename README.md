@@ -10,14 +10,15 @@ pi install git:github.com/fdietze/pi-actor-subagents
 
 ## Interface
 
-The agent receives `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Child agents receive the orchestration tools through pi's `customTools`; actor-subagents is not recursively loaded as a child extension.
+The agent receives `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, and `resume_subagents`. Child agents receive the orchestration tools through pi's `customTools`; actor-subagents is not recursively loaded as a child extension.
 
 The interactive UI shows a compact roster and provides:
 
-- `/agents` — open the swarm panel
-- `/agents-pause` and `/agents-resume` — control scheduling
-- `/agents-kill-all` — stop all background agents
-- `/agents-feed` — show recent swarm activity
+- `/subagents` — open the swarm panel; its input box messages the selected agent as you
+- `/subagents-list` — show the roster as text
+- `/subagents-pause` and `/subagents-resume` — stop or continue agents by name (no name = all)
+- `/subagents-kill` — stop agents by name (no name = all)
+- `/subagents-feed` — show recent swarm activity
 
 Saved swarms live beside the main pi session under `subagents/<main-session-id>/` and are restored when that session returns.
 

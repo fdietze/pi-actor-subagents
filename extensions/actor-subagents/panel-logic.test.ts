@@ -215,7 +215,7 @@ test("formatRoster: model id and effective thinking level are shown together", (
 test("swarmStateLine: paused buffering vs live with activity count", () => {
 	assert.match(swarmStateLine(true, 3), /PAUSED/);
 	assert.match(swarmStateLine(true, 3), /messages buffer/);
-	assert.match(swarmStateLine(true, 3), /agents-resume/);
+	assert.match(swarmStateLine(true, 3), /subagents-resume/);
 	assert.match(swarmStateLine(false, 2), /live · 2 working/);
 	assert.match(swarmStateLine(false, 0), /live · idle/);
 	assert.doesNotMatch(swarmStateLine(false, 0), /running/);

@@ -198,7 +198,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			// Fire-and-forget: Pi's custom-message delivery awaits the prompted turn. Awaiting it
 			// would block the caller (e.g. the spawn_subagent tool) until the target agent finishes.
 			// Kick the turn and return; a
-			// late failure surfaces as an engine error event (visible in /agents-feed + panel).
+			// late failure surfaces as an engine error event (visible in /subagents-feed + panel).
 			// deliverAs "steer": if the target is mid-turn, deliver at the next turn boundary
 			// (after the current tool calls, before the next LLM call) instead of waiting for it
 			// to fully stop. The child-only in-memory steeringMode "all" makes several queued

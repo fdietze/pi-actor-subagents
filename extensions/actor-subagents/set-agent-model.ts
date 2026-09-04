@@ -1,5 +1,5 @@
 /**
- * The one policy for retuning a running agent — used by the `set_agent_model` tool and by the
+ * The one policy for retuning a running agent — used by the `set_subagent_model` tool and by the
  * panel's model/thinking keys, so an agent and a human retuning the same child hit identical
  * rules and identical wording (DRY on knowledge, not on code shape).
  *

@@ -35,6 +35,7 @@ import {
   formatFeedLines,
   formatKillResult,
   formatResumeSummary,
+  formatSnapshot,
   type KillOutcome,
   type ResumeSummary,
 } from "./feed.ts";
@@ -92,8 +93,8 @@ function readChildExtensionPolicy(): string[] {
 const RESUME_NUDGE = "[resumed] continue your interrupted work";
 // Injected into 'main' when the swarm pauses on the turn budget (not on a manual pause).
 const BUDGET_ESCALATION = (total: number) =>
-  `turn budget (${total}) exhausted, swarm paused. resume_agents() to re-arm and continue. ` +
-  `If turns ran higher than expected, inspect with list_agents before resuming.`;
+  `turn budget (${total}) exhausted, swarm paused. resume_subagents() to re-arm and continue. ` +
+  `If turns ran higher than expected, inspect with list_subagents before resuming.`;
 
 // The Engine is a globalThis singleton so it survives /reload. Consequence: a persisted
 // instance keeps the SHAPE (methods) of the code that built it — adding/changing Engine
@@ -187,7 +188,7 @@ export default function subagents(pi: ExtensionAPI) {
   // This (freshly loaded) instance now owns the main delivery with its live pi —
   // replacing a possibly stale sink from a previous instance.
   // deliverAs "steer": deliver agent->main messages at main's next turn boundary instead
-  // of only when main fully stops. Critical for the common "poll list_agents until done"
+  // of only when main fully stops. Critical for the common "poll list_subagents until done"
   // loop: with "followUp" the replies queue while main streams and main never observes
   // them mid-loop (polls forever). "steer" injects them before main's next LLM call so it
   // sees the replies. triggerTurn preserves immediate delivery while main is idle.
@@ -225,7 +226,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   // Read the live hideThinkingBlock setting (the static config AND the ctrl+t runtime toggle
   // both persist to it). reload() picks up runtime toggles; we read fresh per panel-open and
-  // per agent_history call so subagent thinking display stays aligned with the main UI.
+  // per subagent_history call so subagent thinking display stays aligned with the main UI.
   let settingsMgr: SettingsManager | undefined;
   const getHideThinking = async (): Promise<boolean> => {
     try {
@@ -270,7 +271,7 @@ export default function subagents(pi: ExtensionAPI) {
   let foregroundThinkingLevel: ThinkingLevel | undefined;
   // "provider/id" of the models this session is scoped to (empty = no scoping configured).
   let scopedModels: string[] = [];
-  // While the /agents panel is open, hide the persistent roster (otherwise doubled).
+  // While the /subagents panel is open, hide the persistent roster (otherwise doubled).
   let panelOpen = false;
 
   // Capture the model from every foreground handler ctx (more reliable than model_select alone).
@@ -291,10 +292,10 @@ export default function subagents(pi: ExtensionAPI) {
     if (!ui) return;
     try {
       const agents = orderAgents(engine.list(), engine.getMessageMatrix());
-      // No footer status — count/running/budget live in the /agents panel header.
+      // No footer status — count/running/budget live in the /subagents panel header.
       // Permanent roster display above the editor (plan-mode pattern, no overlay).
       // Only show when at least one background agent exists (just 'main' alone is
-      // redundant) and the /agents panel is not already open.
+      // redundant) and the /subagents panel is not already open.
       // Only show background agents ('main' = the chat itself, redundant).
       const background = agents.filter((a) => a.name !== "main");
       const theme = ui.theme;
@@ -334,13 +335,13 @@ export default function subagents(pi: ExtensionAPI) {
             truncateToWidth(stateLine.padEnd(width), width),
           )
         : theme.bg("selectedBg", truncateToWidth(stateLine, width));
-      // Same header the /agents panel shows, so the turn budget is always visible at a
+      // Same header the /subagents panel shows, so the turn budget is always visible at a
       // glance (matters for the budget-pause escalation) — not only inside the panel.
       const { used, total } = engine.budget;
       const header = theme.fg(
         "accent",
         truncateToWidth(
-          `─ agents · ${background.length} agents · ${running} running · budget ${used}/${total} `,
+          `─ subagents · ${background.length} agents · ${running} running · budget ${used}/${total} `,
           width,
         ),
       );
@@ -357,7 +358,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   // Update the status on every engine event; escalate budget-pauses to 'main' exactly once
   // (the pause event fires once — the paused guard in recordTurnStart prevents re-entry).
-  // A manual /agents-pause and a restored swarm do NOT escalate (nobody ran out of budget).
+  // A manual /subagents-pause and a restored swarm do NOT escalate (nobody ran out of budget).
   engine.subscribe((e) => {
     if (e.type === "pause" && e.reason === "budget") {
       try {
@@ -368,7 +369,7 @@ export default function subagents(pi: ExtensionAPI) {
           ),
         );
       } catch {
-        /* no live foreground session — escalation surfaces in /agents-feed + panel instead */
+        /* no live foreground session — escalation surfaces in /subagents-feed + panel instead */
       }
     }
     updateStatus();
@@ -530,7 +531,7 @@ export default function subagents(pi: ExtensionAPI) {
     listAvailableModels: listModels,
   });
 
-  // Retuning a running agent (the set_agent_model tool and the panel's model/effort keys).
+  // Retuning a running agent (the set_subagent_model tool and the panel's model/effort keys).
   // The strict resolver is deliberate: retuning has no inheritance, so an unresolvable ref must
   // fail loudly instead of quietly switching the agent to the foreground model.
   const setAgentModel = createAgentModelSetter({
@@ -573,7 +574,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   // Cold-start rebuild of a persisted swarm AS PAUSED: reopen each agent file, reconcile any
   // crash damage, derive idle-vs-mid-turn from the transcript tail, register paused. The
-  // existing resume_agents()/`/agents-resume` then re-triggers exactly the interrupted agents.
+  // existing resume_subagents()/`/subagents-resume` then re-triggers exactly the interrupted agents.
   const restoreSwarm = async (): Promise<void> => {
     if (!subDir) return;
     // Skip if the swarm is already populated (/reload) or already restored this session.
@@ -609,12 +610,12 @@ export default function subagents(pi: ExtensionAPI) {
         /* skip an unrestorable agent */
       }
     }
-    // Present the restored swarm as paused: one resume_agents()/`/agents-resume` reactivates it.
+    // Present the restored swarm as paused: one resume_subagents()/`/subagents-resume` reactivates it.
     // "restored" is its own reason so it never escalates to main like a budget pause.
     if (restored > 0) engine.pauseSwarm("restored");
   };
 
-  // Shared by /agents-resume and the resume_agents tool: unpause the named agents (all of them
+  // Shared by /subagents-resume and the resume_subagents tool: unpause the named agents (all of them
   // when no names are given, which also re-arms the budget), release their buffered messages and
   // re-trigger only the interrupted ones. Nothing is re-triggered when the resume did not happen
   // (already live, or a named resume held back by the swarm-wide budget pause).
@@ -765,8 +766,8 @@ export default function subagents(pi: ExtensionAPI) {
   // Main-only: deciding whether the paused group continues is main's call. NOT added to
   // the shared toolset (background agents must not self-resume the swarm).
   pi.registerTool({
-    name: "resume_agents",
-    label: "Resume Agents",
+    name: "resume_subagents",
+    label: "Resume Subagents",
     description:
       "Resume PAUSED agents: release their buffered messages and retrigger their interrupted work. " +
       "Without names it resumes every agent and re-arms the turn budget; with names it only lifts " +
@@ -790,12 +791,12 @@ export default function subagents(pi: ExtensionAPI) {
   });
 
   // pi's fuzzy autocomplete preserves registration order when match scores tie. Register the
-  // primary command first so partial input such as /agen selects the panel, not /agents-pause.
-  // /agents opens a focused overlay across the BOTTOM half, its familiar home. Focus — not
+  // primary command first so partial input such as /subag selects the panel, not /subagents-pause.
+  // /subagents opens a focused overlay across the BOTTOM half, its familiar home. Focus — not
   // full-screen size — makes mouse-wheel scrolling possible: pi's fullscreen TUI consumes wheel
   // reports for the main chat unless a focused overlay claims them (mouse-input.ts).
-  pi.registerCommand("agents", {
-    description: "Open the agents panel (Esc to close)",
+  pi.registerCommand("subagents", {
+    description: "Open the subagents panel (Esc to close)",
     handler: async (_args, ctx) => {
       ui = ctx.ui;
       panelOpen = true;
@@ -848,9 +849,9 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  // Every swarm control command shares the /agents- prefix, so typing it lists the whole
+  // Every swarm control command shares the /subagents- prefix, so typing it lists the whole
   // control surface and none collides with a pi built-in (/resume continues a chat session).
-  pi.registerCommand("agents-pause", {
+  pi.registerCommand("subagents-pause", {
     description:
       "Pause agents by name (empty = all); their turns stop and new messages buffer until resumed.",
     handler: async (args, ctx) => {
@@ -859,7 +860,7 @@ export default function subagents(pi: ExtensionAPI) {
       for (const name of paused) void engine.get(name)?.handle.abort();
       ctx.ui.notify(
         paused.length
-          ? `PAUSED ${paused.join(", ")}; new messages will buffer. Use /agents-resume to continue.`
+          ? `PAUSED ${paused.join(", ")}; new messages will buffer. Use /subagents-resume to continue.`
           : "No agents to pause.",
         "warning",
       );
@@ -867,7 +868,7 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("agents-resume", {
+  pi.registerCommand("subagents-resume", {
     description:
       "Resume agents by name (empty = all, which also re-arms the turn budget): release buffered " +
       "messages and retrigger interrupted work. No effect on agents that are already live.",
@@ -876,7 +877,7 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("agents-kill-all", {
+  pi.registerCommand("subagents-kill", {
     description: "Terminate agents by name (empty = all except 'main').",
     handler: async (args, ctx) => {
       const names = parseNames(args);
@@ -896,7 +897,21 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("agents-feed", {
+  // The textual counterpart of the panel: the same roster the list_subagents tool prints, so the
+  // human can read the swarm state without opening (and closing) an overlay.
+  pi.registerCommand("subagents-list", {
+    description: "Show the subagent roster as text.",
+    handler: async (_args, ctx) => {
+      const { used, total } = engine.budget;
+      const ordered = orderAgents(engine.list(), engine.getMessageMatrix());
+      ctx.ui.notify(
+        formatSnapshot(ordered, used, total, "main", engine.isPaused()),
+        "info",
+      );
+    },
+  });
+
+  pi.registerCommand("subagents-feed", {
     description: "Show the agent activity log (last 40 events).",
     handler: async (_args, ctx) => {
       const lines = formatFeedLines(engine.events).slice(-40);

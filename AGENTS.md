@@ -28,8 +28,8 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 ## External interfaces
 
 - Pi package entry: `extensions/actor-subagents/index.ts`
-- Agent tools: `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, `resume_agents`
-- Commands: `/agents`, `/agents-pause`, `/agents-resume`, `/agents-kill-all`, `/agents-feed`
+- Agent tools: `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, `resume_subagents`
+- Commands: `/subagents`, `/subagents-list`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`, `/subagents-feed`
 - Custom message type and details shape: `agent-message.ts`
 - Child capability policy: `$XDG_CONFIG_HOME/pi/actor-subagents/child-extensions.json`
 - Persistence: `<main-session-dir>/subagents/<main-session-id>/`
@@ -40,7 +40,7 @@ There are no open ports or separate services. The extension has the same process
 ## Source map
 
 - `index.ts`: pi integration, lifecycle, child construction, persistence orchestration, commands and UI wiring
-- `engine.ts`: actor registry, spawn tree, scheduling, routing, pause/kill/retune state
+- `engine.ts`: actor registry, spawn tree, scheduling, routing, per-agent and swarm-wide pause, kill/retune state
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration

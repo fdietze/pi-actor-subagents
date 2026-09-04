@@ -20,7 +20,9 @@ The policy is read on every spawn. Parsing is fail-closed: missing, unreadable, 
 
 ## Actor model
 
-The engine owns agent records, spawn parentage, directed mailboxes, activity, status, turn budget, and lifecycle transitions. Spawning reserves a unique name and enforces the agent-count and depth caps before asynchronous child creation. Killing an agent cascades through its descendants. Pausing buffers delivery without losing ordering; resuming releases each mailbox as one ordered batch.
+The engine owns agent records, spawn parentage, directed mailboxes, activity, status, turn budget, and lifecycle transitions. Spawning reserves a unique name and enforces the agent-count and depth caps before asynchronous child creation. Killing an agent cascades through its descendants. Pausing has two distinct causes: a manual pause of named agents (all of them when none are named) and a swarm-wide stop from the turn budget or a restored session, which alone escalates to `main` and alone re-arms on a full resume. Either way delivery buffers without losing ordering, and resuming releases each mailbox as one ordered batch. Aborting an agent cancels its running bash command before stopping its agent loop, so a pause stops work already in flight.
+
+The panel's input box is the human speaking directly to the selected agent: it arrives as a real user turn, and is refused rather than buffered when the agent is paused or still spawning.
 
 Messages use one structured custom pi message type. The structure preserves sender and recipient provenance for routing, model context, and TUI rendering. A live foreground sink on `globalThis` prevents a reloaded extension instance from delivering through a stale pi handle.
 
@@ -40,6 +42,6 @@ The engine, foreground sink, foreground state, and restore guard use versioned `
 
 ## Interfaces
 
-The agent-facing tools are `spawn_subagent`, `send_message`, `set_agent_model`, `list_agents`, `kill_agent`, `agent_history`, `set_status`, and `resume_agents`. Foreground commands are `/agents`, `/agents-pause`, `/agents-resume`, `/agents-kill-all`, and `/agents-feed`. Their names, result/message formats, roster format, domain vocabulary, and persistence layout are compatibility surfaces.
+The agent-facing tools are `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, and `resume_subagents`. Foreground commands are `/subagents`, `/subagents-list`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`, and `/subagents-feed`. Their names, result/message formats, roster format, domain vocabulary, and persistence layout are compatibility surfaces.
 
 The package has no service or network interface of its own. Model traffic and credentials are handled by pi. The extension inherits pi's process authority, so the explicit child-extension policy is the primary capability boundary introduced here.

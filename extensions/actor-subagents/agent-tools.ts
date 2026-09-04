@@ -91,7 +91,7 @@ export interface AgentToolsDeps {
   persistRoster: () => void;
   /** Refresh the status widget after a change an agent made. */
   updateStatus: () => void;
-  /** The main UI's hideThinkingBlock setting, so agent_history matches what the human sees. */
+  /** The main UI's hideThinkingBlock setting, so subagent_history matches what the human sees. */
   getHideThinking: () => Promise<boolean>;
 }
 
@@ -123,8 +123,8 @@ export function makeAgentTools(
         "Create a subagent — a helper that runs inside your current session. Give it a system prompt and its first message (the task). " +
         "It can then be messaged by name. " +
         "Event-driven & fire-and-forget: after spawning, END YOUR TURN — you are automatically re-woken when an agent " +
-        "messages you back. Do NOT poll list_agents or wait in a loop for completion; it wastes turns. Inspect " +
-        "(list_agents/agent_history) only if you suspect something went wrong. The new agent's first reply will be " +
+        "messages you back. Do NOT poll list_subagents or wait in a loop for completion; it wastes turns. Inspect " +
+        "(list_subagents/subagent_history) only if you suspect something went wrong. The new agent's first reply will be " +
         "its understanding of the task plus clarification questions, then it waits — reply using send_message " +
         "(go-ahead + any corrections) to unblock its work." +
         // Only main can reach the human; subagents escalate uncertainty up their own chain instead.
@@ -210,11 +210,11 @@ export function makeAgentTools(
       },
     }),
     defineTool({
-      name: "set_agent_model",
-      label: "Set Agent Model",
+      name: "set_subagent_model",
+      label: "Set Subagent Model",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "set_agent_model",
+          "set_subagent_model",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
@@ -251,11 +251,11 @@ export function makeAgentTools(
       },
     }),
     defineTool({
-      name: "list_agents",
-      label: "List Agents",
+      name: "list_subagents",
+      label: "List Subagents",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "list_agents",
+          "list_subagents",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
@@ -283,11 +283,11 @@ export function makeAgentTools(
       },
     }),
     defineTool({
-      name: "kill_agent",
-      label: "Kill Agent",
+      name: "kill_subagent",
+      label: "Kill Subagent",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "kill_agent",
+          "kill_subagent",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
@@ -318,11 +318,11 @@ export function makeAgentTools(
       },
     }),
     defineTool({
-      name: "agent_history",
-      label: "Agent History",
+      name: "subagent_history",
+      label: "Subagent History",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "agent_history",
+          "subagent_history",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
@@ -393,7 +393,7 @@ export function makeAgentTools(
           context?.expanded ?? false,
         ),
       description:
-        "Set your short status line shown in list_agents and the agents panel " +
+        "Set your short status line shown in list_subagents and the agents panel " +
         "(e.g. 'parsing 500 files', 'waiting on review'). Pass empty string to clear. " +
         `Keep it terse — one short phrase, ≤ ${CUSTOM_STATUS_MAX} chars (longer is truncated in the roster). ` +
         "It must describe your CURRENT state, not a past action. " +

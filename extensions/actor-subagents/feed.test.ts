@@ -58,7 +58,7 @@ test("formatSnapshot exposes the paused scheduler and buffering behavior", () =>
 	const out = formatSnapshot([rec({ name: "scout" })], 0, 100, "main", true);
 	assert.match(out, /PAUSED/);
 	assert.match(out, /messages are buffering/);
-	assert.match(out, /agents-resume/);
+	assert.match(out, /subagents-resume/);
 });
 
 test("formatSnapshot shows model and effective thinking level together", () => {

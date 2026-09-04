@@ -64,12 +64,12 @@ export interface RosterEntry {
 
 /**
  * Swarm-wide scheduler state line, shown below the roster (panel) and footer. Expresses
- * the mode that /agents-pause and /agents-resume toggle plus the real activity count,
+ * the mode that /subagents-pause and /subagents-resume toggle plus the real activity count,
  * and makes paused mailbox behavior explicit. The fine-grained per-agent phase
  * (thinking/tool:.../idle) lives in the rows; this line is only the global mode.
  */
 export function swarmStateLine(paused: boolean, runningCount: number): string {
-	if (paused) return " ⏸ PAUSED — messages buffer · /agents-resume to continue ";
+	if (paused) return " ⏸ PAUSED — messages buffer · /subagents-resume to continue ";
 	return ` ▶ live · ${runningCount > 0 ? `${runningCount} working` : "idle"} `;
 }
 
@@ -223,7 +223,7 @@ export function formatRoster(
 	});
 }
 
-// ── agent_history: a windowed, text-only transcript dump for inspecting any agent ──
+// ── subagent_history: a windowed, text-only transcript dump for inspecting any agent ──
 
 type HistMessage = {
 	role?: string;

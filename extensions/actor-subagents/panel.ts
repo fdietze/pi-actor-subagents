@@ -198,7 +198,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 
 	// Text typed here is a MESSAGE to the selected agent, not a command line. Slash input is
 	// almost always a pi command aimed at the main chat, and sending it as a task wastes an
-	// agent turn on "/agents" (observed). Refuse it and say where commands belong.
+	// agent turn on "/subagents" (observed). Refuse it and say where commands belong.
 	let notice: string | undefined;
 	editor.onSubmit = (value: string) => {
 		const to = selectedName();
@@ -376,7 +376,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			const lines: string[] = [];
 			const running = deps.engine.list().filter((a) => agentStatus(a).kind === "working").length;
 			const { used, total } = deps.engine.budget;
-			const header = `─ agents · ${agents().length} agents · ${running} running · budget ${used}/${total} `;
+			const header = `─ subagents · ${agents().length} agents · ${running} running · budget ${used}/${total} `;
 			lines.push(theme.fg("accent", truncateToWidth(header.padEnd(width, "─"), width)));
 			const styler = styleStatus(theme);
 			const matrix = deps.engine.getMessageMatrix();

@@ -45,7 +45,7 @@ export interface StatusInputs {
 
 /**
  * Single source of truth for an agent's status, shared by the agent-facing roster
- * (list_agents) and the TUI panel so the vocabulary stays consistent.
+ * (list_subagents) and the TUI panel so the vocabulary stays consistent.
  */
 export function agentStatus(r: StatusInputs): AgentStatus {
 	if (r.pending) return { kind: "spawning" };
