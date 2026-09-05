@@ -14,10 +14,10 @@ Each child session is created with:
 - its own system prompt and session file;
 - orchestration tools supplied directly as pi `customTools`;
 - recursive extension discovery disabled;
-- the bundled child timestamp extension, always; and
-- additionally, the extension paths granted by the XDG child policy.
+- the tool-result timestamp hook, registered in process as an inline extension factory; and
+- the extension paths granted by the XDG child policy.
 
-The bundled helper is the one extension every child loads. A pi hook only fires in the session that registered it, so children need their own copy of the tool-result timestamp that lets an agent perceive elapsed time. The policy is read on every spawn. Parsing is fail-closed: missing, unreadable, malformed, or structurally invalid input becomes an empty list. actor-subagents itself is not loaded recursively in children because its tools are already injected.
+A pi hook only fires in the session that registered it, so the timestamp that lets an agent perceive elapsed time has to be installed into every child separately. It travels the same in-process route as the orchestration tools rather than as a file path, which keeps the granted-paths list an exact picture of the foreign-capability policy. The policy is read on every spawn. Parsing is fail-closed: missing, unreadable, malformed, or structurally invalid input becomes an empty list. actor-subagents itself is not loaded recursively in children because its tools are already injected.
 
 ## Actor model
 
