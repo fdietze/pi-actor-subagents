@@ -71,15 +71,26 @@ import { timestampToolResult } from "./tool-timestamp.ts";
 const CAPS = { maxAgents: 8, maxSpawnDepth: 3, turnBudget: 200 };
 
 /**
- * Gives one session a sense of elapsed time by stamping the wall-clock finish time onto
- * every tool result — the basis for a set_status ETA that is measured instead of guessed.
+ * Gives one session a sense of elapsed time by stamping the wall-clock start and finish times
+ * onto every tool result — the basis for a set_status ETA that is measured instead of guessed,
+ * and the only way an agent can read a single tool's own duration.
  * A pi hook only fires in the session that registered it, so this runs twice: directly for
  * the foreground, and as an inline extension factory inside every child session.
+ *
+ * The start time is captured at tool_call (fired before execution) and consumed at tool_result,
+ * paired by tool call id. An aborted tool may fire tool_call without a tool_result, leaving one
+ * stale entry; that is a bounded, negligible leak, so no separate cleanup path is warranted.
  */
 function registerToolTimestamps(pi: ExtensionAPI): void {
-  pi.on("tool_result", (event) => ({
-    content: timestampToolResult(event.content, Date.now()),
-  }));
+  const startedAt = new Map<string, number>();
+  pi.on("tool_call", (event) => {
+    startedAt.set(event.toolCallId, Date.now());
+  });
+  pi.on("tool_result", (event) => {
+    const start = startedAt.get(event.toolCallId);
+    startedAt.delete(event.toolCallId);
+    return { content: timestampToolResult(event.content, start, Date.now()) };
+  });
 }
 
 /** Read the XDG-managed child capability policy on every spawn; malformed/missing means none. */

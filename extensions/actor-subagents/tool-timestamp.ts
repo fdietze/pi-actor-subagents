@@ -26,15 +26,26 @@ function formatClockTime(when: Date): string {
  * part of the tool's own output. Generic in the part type to stay SDK-agnostic while
  * remaining assignable back to the caller's content array.
  *
- * @param finishedAt epoch milliseconds, supplied by the imperative shell.
+ * Both times let an agent read a single tool's own duration directly (finished - started),
+ * not just the moment it ended. `startedAt` is optional because the shell captures it from a
+ * separate tool_call hook that may not have fired (e.g. a synthesized result); the stamp then
+ * degrades to the finish time alone rather than inventing a start.
+ *
+ * @param startedAt epoch milliseconds when the tool began, or undefined if unknown.
+ * @param finishedAt epoch milliseconds when the tool finished.
  */
 export function timestampToolResult<T>(
   content: readonly T[] | undefined,
+  startedAt: number | undefined,
   finishedAt: number,
 ): (T | TextPart)[] {
+  const finished = formatClockTime(new Date(finishedAt));
   const stamp: TextPart = {
     type: "text",
-    text: `[finished ${formatClockTime(new Date(finishedAt))}]`,
+    text:
+      startedAt !== undefined
+        ? `[started ${formatClockTime(new Date(startedAt))} · finished ${finished}]`
+        : `[finished ${finished}]`,
   };
   return [...(content ?? []), stamp];
 }

@@ -21,7 +21,7 @@ npm pack --dry-run
 
 A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. The entry point reads the explicit XDG policy on every spawn and supplies only those additional paths. Missing or invalid policy is an empty capability set.
 
-Every tool result carries the wall-clock time it finished, so agents can measure elapsed time (which is what `set_status`'s `etaMinutes` needs). A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the XDG capability policy. Both registrations apply the pure `tool-timestamp.ts`.
+Every tool result carries the wall-clock times it started and finished, so agents can measure elapsed time and a tool's own duration (which is what `set_status`'s `etaMinutes` needs). The start time is captured at `tool_call` and paired to the result by call id. A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the XDG capability policy. Both registrations apply the pure `tool-timestamp.ts`.
 
 Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
 
@@ -47,7 +47,7 @@ There are no open ports or separate services. The extension has the same process
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration
 - `agent-message.ts`, `agent-message-renderer.ts`: structured peer messages and TUI rendering
-- `tool-timestamp.ts`: pure tool-result stamper (wall-clock finish time)
+- `tool-timestamp.ts`: pure tool-result stamper (wall-clock start + finish times)
 - `panel.ts`, `panel-logic.ts`, `feed.ts`: interactive and textual projections
 - focused `*.ts` helpers: pure domain rules; adjacent `*.test.ts` files are their tests
 
