@@ -19,7 +19,9 @@ npm pack --dry-run
 
 `extensions/actor-subagents/index.ts` is the pi entry point and imperative shell. It registers the foreground tools, commands, renderer, and lifecycle handlers; creates headless child sessions through the pi SDK; and connects them to the pure orchestration core.
 
-A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. The entry point reads the explicit XDG policy on every spawn and supplies only those additional paths. Missing or invalid policy is an empty capability set.
+A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. `additionalExtensionPaths` prepends the always-on bundled `child-timestamp-extension.ts`; after it, the entry point reads the explicit XDG policy on every spawn and supplies only those additional paths. Missing or invalid policy is an empty capability set.
+
+Every tool result carries the wall-clock time it finished, so agents can measure elapsed time (which is what `set_status`'s `etaMinutes` needs). `index.ts` registers the `tool_result` hook for the foreground; a pi hook only fires in the session that registered it, so children load `child-timestamp-extension.ts` for the same effect. Both call the pure `tool-timestamp.ts`.
 
 Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
 
@@ -32,6 +34,7 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 - Commands: `/subagents`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`
 - Custom message type and details shape: `agent-message.ts`
 - Child capability policy: `$XDG_CONFIG_HOME/pi/actor-subagents/child-extensions.json`
+- Child-side extension shipped by this package: `extensions/actor-subagents/child-timestamp-extension.ts`
 - Persistence: `<main-session-dir>/subagents/<main-session-id>/`
 - Process reload compatibility: every `__subagents*` `globalThis` key in `index.ts`
 
@@ -45,6 +48,7 @@ There are no open ports or separate services. The extension has the same process
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration
 - `agent-message.ts`, `agent-message-renderer.ts`: structured peer messages and TUI rendering
+- `tool-timestamp.ts`: pure tool-result stamper; `child-timestamp-extension.ts`: the child-side pi extension that applies it
 - `panel.ts`, `panel-logic.ts`, `feed.ts`: interactive and textual projections
 - focused `*.ts` helpers: pure domain rules; adjacent `*.test.ts` files are their tests
 

@@ -397,10 +397,12 @@ export function makeAgentTools(
         "(e.g. 'parsing 500 files', 'waiting on review'). Pass empty string to clear. " +
         `Keep it terse — one short phrase, ≤ ${CUSTOM_STATUS_MAX} chars (longer is truncated in the roster). ` +
         "It must describe your CURRENT state, not a past action. " +
-        "If you are blocked on a long-running command with a known timeout or duration, pass " +
-        "etaMinutes (how many minutes from NOW until you're free) — the extension renders it as an " +
-        "absolute clock time so others see when you'll be free; do NOT write an ETA into the status " +
-        "text yourself. etaMinutes is fully respecified each call: omit it to clear a prior ETA. " +
+        "Every tool result is stamped with the wall-clock time it finished — use those stamps to " +
+        "gauge elapsed time and rates. Set etaMinutes (minutes from NOW until you're free) only " +
+        "from a concrete basis: a command's timeout, a known duration, or a measured rate; omit it " +
+        "when you would be guessing — no ETA beats a wrong one. It is fully respecified each call " +
+        "(omit to clear a prior ETA) and rendered as an absolute clock time, so do NOT write an " +
+        "ETA into the status text yourself. " +
         "Update status when your phase changes, and before you END A TURN and go idle set it to a " +
         "resting/outcome state (e.g. 'done', 'waiting for critic', 'blocked: needs X') or clear it — " +
         "never leave a stale in-progress phrase like 'sending to editor' once you are idle. " +

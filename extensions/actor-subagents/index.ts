@@ -65,9 +65,22 @@ import {
   type SessionLike,
 } from "./spawner.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "./thinking-level.ts";
+import { timestampToolResult } from "./tool-timestamp.ts";
 
 // Caps — Phase 1: module constants (binding them to settings is a trivial later addition).
 const CAPS = { maxAgents: 8, maxSpawnDepth: 3, turnBudget: 200 };
+
+/**
+ * Gives one session a sense of elapsed time by stamping the wall-clock finish time onto
+ * every tool result — the basis for a set_status ETA that is measured instead of guessed.
+ * A pi hook only fires in the session that registered it, so this runs twice: directly for
+ * the foreground, and as an inline extension factory inside every child session.
+ */
+function registerToolTimestamps(pi: ExtensionAPI): void {
+  pi.on("tool_result", (event) => ({
+    content: timestampToolResult(event.content, Date.now()),
+  }));
+}
 
 /** Read the XDG-managed child capability policy on every spawn; malformed/missing means none. */
 function readChildExtensionPolicy(): string[] {
@@ -436,8 +449,16 @@ export default function subagents(pi: ExtensionAPI) {
       agentDir: realAgentDir,
       settingsManager: childSettings,
       // noExtensions disables discovery; explicit additional paths are still loaded.
+      // additionalExtensionPaths stays exactly the XDG policy, so that array remains a
+      // faithful picture of the FOREIGN capability boundary. Our own always-on hook rides
+      // the separate in-process factory channel (like the orchestration customTools), which
+      // cannot fail to resolve and, loading after the path extensions, appends the stamp
+      // last — a policy-granted extension cannot clobber it.
       noExtensions: true,
       additionalExtensionPaths: readChildExtensionPolicy(),
+      extensionFactories: [
+        { name: "subagent-timestamps", factory: registerToolTimestamps },
+      ],
       systemPromptOverride: () =>
         agentSystemPrompt(spec.name, spec.systemPrompt, spec.spawnedBy),
     });
@@ -697,6 +718,7 @@ export default function subagents(pi: ExtensionAPI) {
     );
     updateStatus();
   });
+  registerToolTimestamps(pi);
   pi.on("agent_end", (event, ctx) => {
     ui = ctx.ui;
     captureMainContext(ctx);
