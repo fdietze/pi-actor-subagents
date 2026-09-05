@@ -101,7 +101,16 @@ function readChildExtensionPolicy(): string[] {
 
 // Fired to each mid-turn-paused agent on resume to re-trigger its work. Fixed text
 // (not main-authored) so resume stays a single tool call from main's side.
-const RESUME_NUDGE = "[resumed] continue your interrupted work";
+// It carries the current local date and time because a resumed transcript can be days old:
+// the tool-result stamps in it are date-free, so yesterday's [finished 23:10:04] reads like
+// today's. This is the agent's only anchor at the point where its transcript jumps in time.
+const RESUME_NUDGE = (now: Date) => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+    `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `[resumed ${stamp}] continue your interrupted work`;
+};
 // Injected into 'main' when the swarm pauses on the turn budget (not on a manual pause).
 const BUDGET_ESCALATION = (total: number) =>
   `turn budget (${total}) exhausted, swarm paused. resume_subagents() to re-arm and continue. ` +
@@ -657,7 +666,8 @@ export default function subagents(pi: ExtensionAPI) {
       updateStatus();
       return { ...resumed, retriggered: 0 };
     }
-    for (const name of interrupted) void engine.route("main", name, RESUME_NUDGE);
+    const nudge = RESUME_NUDGE(new Date());
+    for (const name of interrupted) void engine.route("main", name, nudge);
     updateStatus();
     return { ...resumed, retriggered: interrupted.length };
   };
