@@ -152,7 +152,9 @@ const BUDGET_ESCALATION = (total: number) =>
 //      + deliverUser (panel input as a real user turn).
 // v20: isPaused() is the swarm stop only (+ pausedAgents()); resume re-arms the turn budget
 //      only when it lifts that stop.
-const ENGINE_KEY = "__subagentsEngine_v20";
+// v21: Engine gains awaitReaction + statusOf + pauseCauseOf (send/spawn report the receiver's
+//      state); route's buffered reason widens from "paused" to PauseReason.
+const ENGINE_KEY = "__subagentsEngine_v21";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
