@@ -521,6 +521,8 @@ export class Engine {
 		// The event log closes the race with the delivery that triggers the reaction: `sinceEvent` is
 		// taken BEFORE routing, so a turn or failure that lands between delivery and this call is
 		// found here instead of being waited out. (A synchronous delivery failure does exactly that.)
+		// The mark is what scopes the observation to THIS delivery; reactions are matched by agent
+		// name, so a mark from before some other delivery would credit that agent's older work here.
 		const reacted = (e: AgentEvent): boolean =>
 			(e.type === "turn" || e.type === "error" || e.type === "kill") && e.name === name;
 		for (let i = Math.max(0, sinceEvent); i < this.events.length; i++) {

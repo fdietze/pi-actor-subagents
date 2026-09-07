@@ -847,6 +847,17 @@ test("awaitReaction sees a reaction that happened before the wait started", asyn
 	});
 });
 
+test("awaitReaction ignores a reaction that is older than the mark", async () => {
+	const e = new Engine(caps);
+	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });
+	e.recordTurnStart("w"); // work the agent did BEFORE this message was routed to it
+	e.endTurn("w");
+	// The mark is what scopes the observation to one delivery: without it, a multicast whose first
+	// target is slow to route would credit this agent's earlier turn as a reaction to our message.
+	const sinceEvent = e.events.length;
+	assert.deepEqual(await e.awaitReaction("w", sinceEvent, 20), { observed: "unmoved", status: { kind: "idle" } });
+});
+
 test("awaitReaction reports an unmoved target and ignores other agents' turns", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "quiet", depth: 1 });

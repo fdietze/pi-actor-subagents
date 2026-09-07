@@ -122,7 +122,7 @@ export function makeAgentTools(
         ),
       description:
         "Create a subagent — a helper that runs inside your current session. Give it a system prompt and its first message (the task). " +
-        "It can then be messaged by name. The result briefly confirms that the new agent picked its task up and " +
+        "It can then be messaged by name. The result briefly checks whether the new agent picked its task up and " +
         "reports its state ('idle (no reaction)' means it received the task but did not start a turn). " +
         "Event-driven & fire-and-forget: after spawning, END YOUR TURN — you are automatically re-woken when an agent " +
         "messages you back. Do NOT poll list_subagents or wait in a loop for completion; it wastes turns. Inspect " +
@@ -203,14 +203,16 @@ export function makeAgentTools(
       }),
       execute: async (_id, args) => {
         const targets = normalizeTargets(args.to);
-        // Taken BEFORE any delivery: awaitReaction reads the event log from here, so a reaction
-        // that happens between delivery and the wait is observed instead of waited out.
-        const sinceEvent = engine.events.length;
         // Route first (synchronous ordering, one feed event per target), then observe reactions.
+        // Each target carries its OWN mark, taken immediately before its own delivery: awaitReaction
+        // reads the event log from there, so a reaction that happens between that delivery and the
+        // wait is observed instead of waited out, while activity a target had BEFORE its message
+        // arrived (e.g. while an earlier target was being routed) is not mistaken for a reaction.
         const routed = [];
         for (const t of targets) {
+          const sinceEvent = engine.events.length;
           const outcome = await engine.route(selfName, t, args.content);
-          routed.push({ target: t, ...outcome });
+          routed.push({ target: t, sinceEvent, ...outcome });
         }
         // The per-target waits run in PARALLEL: serial waits would cost timeout x targets for a
         // multicast, turning one bounded observation into a long block.
@@ -218,7 +220,7 @@ export function makeAgentTools(
           routed.map(async (result) => {
             // Parked or gone: no turn can follow, so there is nothing to observe.
             if (result.outcome !== "delivered") return result;
-            const reaction = await engine.awaitReaction(result.target, sinceEvent);
+            const reaction = await engine.awaitReaction(result.target, result.sinceEvent);
             return { target: result.target, outcome: result.outcome, reaction };
           }),
         );
