@@ -7,7 +7,7 @@ import {
 	mergeRoutedAgentMessages,
 	type RoutedAgentMessage,
 } from "./agent-message.ts";
-import type { AgentActivity, StopReason } from "./agent-status.ts";
+import { type AgentActivity, type AgentStatus, agentStatus, type StopReason } from "./agent-status.ts";
 import type { ThinkingLevel } from "./thinking-level.ts";
 
 export interface AgentHandle {
@@ -151,11 +151,27 @@ export type CheckResult = { ok: true } | { ok: false; reason: string };
 /** Kill reports every name it took down, because killing a parent takes its subtree with it. */
 export type KillResult = { ok: true; killed: string[] } | { ok: false; reason: string };
 
-/** Structured routing result; callers never infer delivery state from display prose. */
+/**
+ * Structured routing result; callers never infer delivery state from display prose.
+ *
+ * Two orthogonal axes: `outcome` is the MESSAGE's fate (accepted / parked / gone), and
+ * `receiverStatus` is the RECEIVER's liveness at that moment. Keeping them apart is what lets a
+ * sender tell "delivered into a working agent" from "delivered into an agent that never moved".
+ * The status rides only on `delivered`: a buffered target's status is trivially "paused" and its
+ * `reason` says more, and a failed target has no record at all (make illegal states
+ * unrepresentable).
+ */
 export type RouteResult =
-	| { outcome: "delivered" }
-	| { outcome: "buffered"; reason: "paused" }
+	| { outcome: "delivered"; receiverStatus: AgentStatus }
+	| { outcome: "buffered"; reason: PauseReason }
 	| { outcome: "failed"; reason: string };
+
+/**
+ * How long a sender waits for a delivered-to agent to REACT (start a turn or fail) before
+ * reporting the plain snapshot. Short on purpose: it confirms pickup, never completion, so the
+ * fire-and-forget actor model stays intact.
+ */
+export const REACTION_TIMEOUT_MS = 3000;
 
 /** Counts work released by resume without claiming asynchronous delivery completed. */
 export interface EngineResumeResult {
@@ -443,6 +459,69 @@ export class Engine {
 	}
 
 	/**
+	 * Why this agent is stopped, or undefined when it is live. The swarm-wide cause wins over a
+	 * manual pause because only a full resume can lift it — reporting "manual" then would point
+	 * the caller at a resume that does nothing.
+	 */
+	private pauseCauseOf(rec: AgentRecord): PauseReason | undefined {
+		if (this.budgetPaused) return this.pauseReason ?? "budget";
+		return rec.paused === true ? "manual" : undefined;
+	}
+
+	/**
+	 * The agent's status, with the swarm-wide pause folded in. `agentStatus` is a per-record pure
+	 * function and deliberately cannot see `budgetPaused`, which lives on the engine; folding it in
+	 * here keeps the swarm-level knowledge in the one place that owns it instead of adding a
+	 * "budget" variant to the shared status vocabulary.
+	 */
+	statusOf(name: string): AgentStatus | undefined {
+		const rec = this.agents.get(name);
+		if (!rec) return undefined;
+		return agentStatus({ ...rec, paused: this.isAgentPaused(rec) });
+	}
+
+	/**
+	 * Wait, bounded, for a just-messaged agent to REACT: its next turn start (it picked the
+	 * message up) or an error (it is broken). Resolves with the fresh status, or undefined if the
+	 * agent is gone by then.
+	 *
+	 * Why this exists: route() returns synchronously, and a kicked idle agent's turn has not
+	 * started yet at that instant — its snapshot still reads "idle", which is indistinguishable
+	 * from an agent that will never move. Waiting for the turn to START (never to finish) buys that
+	 * distinction without breaking the fire-and-forget architecture.
+	 */
+	async awaitReaction(name: string, timeoutMs: number = REACTION_TIMEOUT_MS): Promise<AgentStatus | undefined> {
+		// 'main' never emits a `turn` event: only background sessions run through recordTurnStart,
+		// the sole emitter. Waiting on the foreground would therefore always burn the full timeout,
+		// and it is pointless anyway — 'main' is the human's own chat, not a receiver that can be
+		// stuck or broken. Its record's activity is tracked live, so the snapshot is already honest.
+		if (name !== "main")
+			await new Promise<void>((resolve) => {
+				let settled = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const finish = () => {
+					if (settled) return;
+					settled = true;
+					if (timer) clearTimeout(timer);
+					unsubscribe();
+					resolve();
+				};
+				// Subscribe BEFORE inspecting the current state: the reverse order has a window in which
+				// the reaction happens unobserved and the wait runs to its full timeout.
+				const unsubscribe = this.subscribe((e) => {
+					if (e.type === "turn" || e.type === "error" || e.type === "kill") {
+						if (e.name === name) finish();
+					}
+				});
+				timer = setTimeout(finish, timeoutMs);
+				// Already reacting (or already gone) — nothing to wait for.
+				const rec = this.agents.get(name);
+				if (!rec || rec.activity !== undefined) finish();
+			});
+		return this.statusOf(name);
+	}
+
+	/**
 	 * Manually pause agents — all background agents when no names are given, otherwise exactly
 	 * the named ones. Returns the agents that were not already paused, so the caller can abort
 	 * their running turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers
@@ -548,7 +627,11 @@ export class Engine {
 		target.lastActivity = Date.now();
 		this.countEdge(from, to);
 		this.emit({ type: "route", from, to, preview: previewOf(content), buffered, ts: Date.now() });
-		return buffered ? { outcome: "buffered", reason: "paused" } : { outcome: "delivered" };
+		const cause = this.pauseCauseOf(target);
+		// `buffered === (cause !== undefined)` by construction; the check is what proves it to the
+		// type system rather than asserting non-null.
+		if (cause) return { outcome: "buffered", reason: cause };
+		return { outcome: "delivered", receiverStatus: agentStatus(target) };
 	}
 
 	/**

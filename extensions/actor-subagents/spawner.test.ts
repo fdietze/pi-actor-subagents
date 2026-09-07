@@ -24,10 +24,18 @@ class FakeSession implements SessionLike {
 	getContextUsage() {
 		return { tokens: 0, contextWindow: 1000, percent: 0 };
 	}
+	/** Mimics a live session that picks a delivered message up and starts a turn on it. */
+	autoReact = false;
 	private listeners: ((e: { type: string; message?: unknown }) => void)[] = [];
 	async sendAgentMessage(message: RoutedAgentMessage, options?: { deliverAs?: "steer" | "followUp" }) {
 		this.delivered.push(message);
 		this.lastDeliverAs = options?.deliverAs;
+		// Asynchronously, like the real session: the turn cannot have started when route() returns.
+		if (this.autoReact)
+			setTimeout(() => {
+				this.emit("agent_start");
+				this.emit("turn_start");
+			}, 0);
 	}
 	async sendUserMessage(text: string) {
 		this.userMessages.push(text);
@@ -92,7 +100,7 @@ test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
 
 	// main -> echo
 	const rt = await engine.route("main", "echo", "ping");
-	assert.deepEqual(rt, { outcome: "delivered" });
+	assert.deepEqual(rt, { outcome: "delivered", receiverStatus: { kind: "idle" } });
 	assert.deepEqual(sessions.get("echo")?.delivered, [createRoutedAgentMessage("main", "ping")]);
 	// Inter-agent delivery uses steer (next-boundary), not followUp.
 	assert.equal(sessions.get("echo")?.lastDeliverAs, "steer");
@@ -117,7 +125,28 @@ test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
 	// pausing buffers routing
 	engine.pause();
 	const blocked = await engine.route("main", "echo", "again");
-	assert.deepEqual(blocked, { outcome: "buffered", reason: "paused" });
+	// The budget stop already holds here, and that swarm-wide cause outranks the manual pause:
+	// only a full resume can release this message.
+	assert.deepEqual(blocked, { outcome: "buffered", reason: "budget" });
+});
+
+test("spawn confirms the new agent reacted and reports its observed status", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	withMain(engine, []);
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "test", id: "m", model: {} }),
+		createSession: async () => {
+			const session = new FakeSession();
+			session.autoReact = true;
+			return { session };
+		},
+	});
+
+	const result = await spawner.spawnAgent({ name: "worker", systemPrompt: "work", message: "do it" }, "main");
+
+	// The status is the one observed AFTER the wait: at delivery the child was still idle.
+	assert.match(result.msg, /sent initial message \(thinking\)/);
 });
 
 test("spawn reports an initial message as buffered while the swarm-wide pause holds", async () => {
@@ -133,13 +162,16 @@ test("spawn reports an initial message as buffered while the swarm-wide pause ho
 	// A manual pause names existing agents instead, so it deliberately does not cover new ones.
 	engine.pauseSwarm("restored");
 
+	const started = Date.now();
 	const result = await spawner.spawnAgent(
 		{ name: "waiting", systemPrompt: "wait", message: "start later" },
 		"main",
 	);
 
 	assert.equal(result.ok, true);
-	assert.match(result.msg, /buffered initial message \(agents paused\)/);
+	// A parked message can trigger no turn, so this path must not spend the confirmation window.
+	assert.ok(Date.now() - started < 1000);
+	assert.match(result.msg, /buffered initial message \(agents paused: restored\)/);
 	assert.doesNotMatch(result.msg, /sent initial message/);
 	assert.deepEqual(session.delivered, []);
 	assert.deepEqual(engine.get("waiting")?.pausedInbox, [createRoutedAgentMessage("main", "start later")]);

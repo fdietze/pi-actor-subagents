@@ -23,6 +23,7 @@ import {
   formatKillResult,
   formatMulticastResult,
   formatSnapshot,
+  type MulticastRouteOutcome,
   normalizeTargets,
 } from "./feed.ts";
 import { CUSTOM_STATUS_MAX, formatHistory } from "./panel-logic.ts";
@@ -121,7 +122,8 @@ export function makeAgentTools(
         ),
       description:
         "Create a subagent — a helper that runs inside your current session. Give it a system prompt and its first message (the task). " +
-        "It can then be messaged by name. " +
+        "It can then be messaged by name. The result briefly confirms that the new agent picked its task up and " +
+        "reports its state ('idle (no reaction)' means it received the task but did not start a turn). " +
         "Event-driven & fire-and-forget: after spawning, END YOUR TURN — you are automatically re-woken when an agent " +
         "messages you back. Do NOT poll list_subagents or wait in a loop for completion; it wastes turns. Inspect " +
         "(list_subagents/subagent_history) only if you suspect something went wrong. The new agent's first reply will be " +
@@ -184,7 +186,10 @@ export function makeAgentTools(
         ),
       description:
         "Replying to an agent always means calling this tool with that agent as the target. Ordinary assistant text " +
-        'does not reach the agent. Fire-and-forget message to a list of agents (e.g. ["main"]). Returns immediately. ' +
+        'does not reach the agent. Fire-and-forget message to a list of agents (e.g. ["main"]). It returns as soon as ' +
+        "each receiver has picked the message up (briefly confirmed), never waiting for the reply, and reports every " +
+        "receiver's state back: working/thinking means it started on your message, 'idle (no reaction)' means it took " +
+        "the message but did not start a turn, and buffered/failed mean it is paused or gone. " +
         "After sending, END YOUR TURN — you are automatically re-woken if a reply arrives. Do NOT poll or wait in a " +
         "loop; inspect only if you suspect a problem.",
       parameters: Type.Object({
@@ -198,11 +203,22 @@ export function makeAgentTools(
       }),
       execute: async (_id, args) => {
         const targets = normalizeTargets(args.to);
-        const results = [];
+        // Route first (synchronous ordering, one feed event per target), then confirm reactions.
+        const routed: MulticastRouteOutcome[] = [];
         for (const t of targets) {
           const outcome = await engine.route(selfName, t, args.content);
-          results.push({ target: t, ...outcome });
+          routed.push({ target: t, ...outcome });
         }
+        // The per-target waits run in PARALLEL: serial waits would cost timeout x targets for a
+        // multicast, turning one bounded confirmation into a long block.
+        const results = await Promise.all(
+          routed.map(async (result) => {
+            if (result.outcome !== "delivered") return result; // parked or gone: no turn can follow
+            const reacted = await engine.awaitReaction(result.target);
+            // Gone mid-wait: keep the snapshot taken at delivery rather than inventing a state.
+            return reacted ? { ...result, receiverStatus: reacted } : result;
+          }),
+        );
         return {
           content: [{ type: "text", text: formatMulticastResult(results) }],
           details: {},

@@ -2,8 +2,8 @@
  * Pure formatting for the read-only observability of the agents.
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
-import { agentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, RouteResult } from "./engine.ts";
+import { type AgentStatus, agentStatus, formatStatus } from "./agent-status.ts";
+import type { AgentRecord, PauseReason, RouteResult } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
@@ -112,20 +112,41 @@ export interface KillOutcome {
 
 export type MulticastRouteOutcome = RouteResult & { target: string };
 
-/** Summarizes delivered, paused-buffered, and failed routes without conflating them. */
+/**
+ * Receiver liveness as reported back to a sender, in the roster's own vocabulary plus one
+ * refinement: for a DELIVERED message, plain idle means the receiver did not start a turn within
+ * the confirmation window. That "it took the message and did not move" signal is the whole point
+ * of confirming a reaction, so it must not read like a healthy idle agent.
+ */
+export function formatReceiverStatus(status: AgentStatus): string {
+	return status.kind === "idle" && status.outcome === undefined ? "idle (no reaction)" : formatStatus(status);
+}
+
+/** Why a message is parked, in the sender's terms: what would have to happen to release it. */
+const BUFFERED_CAUSE: Record<PauseReason, string> = {
+	manual: "paused",
+	budget: "budget pause",
+	restored: "paused after restore",
+};
+
+/**
+ * Summarizes delivered, paused-buffered, and failed routes without conflating them, and reports
+ * the receiver's state per target — state only, no advice on what the sender should do about it.
+ */
 export function formatMulticastResult(results: MulticastRouteOutcome[]): string {
 	if (results.length === 0) return "error: no targets";
 	const delivered: string[] = [];
 	const buffered: string[] = [];
 	const failed: string[] = [];
 	for (const result of results) {
-		if (result.outcome === "delivered") delivered.push(result.target);
-		else if (result.outcome === "buffered") buffered.push(result.target);
+		if (result.outcome === "delivered")
+			delivered.push(`${result.target} (${formatReceiverStatus(result.receiverStatus)})`);
+		else if (result.outcome === "buffered") buffered.push(`${result.target} (${BUFFERED_CAUSE[result.reason]})`);
 		else failed.push(`${result.target}: ${result.reason}`);
 	}
 	const parts: string[] = [];
 	if (delivered.length) parts.push(`sent to ${delivered.join(", ")}`);
-	if (buffered.length) parts.push(`buffered for ${buffered.join(", ")} (agents paused)`);
+	if (buffered.length) parts.push(`buffered for ${buffered.join(", ")}`);
 	if (failed.length) parts.push(`failed: ${failed.join("; ")}`);
 	return parts.join(" · ");
 }

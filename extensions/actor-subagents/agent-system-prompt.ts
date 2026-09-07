@@ -17,7 +17,7 @@ export function agentSystemPrompt(
     `You were spawned by "${spawnedBy}".`,
     "You can talk to other agents with these tools:",
     "- spawn_subagent({name, systemPrompt, overrideModel?, overrideThinkingLevel?, message}): create a subagent inside this session (message = its first task).",
-    '- send_message({to, content}): to is an array of agent names (multicast); fire-and-forget (e.g. ["main"]).',
+    '- send_message({to, content}): to is an array of agent names (multicast); fire-and-forget (e.g. ["main"]). It never waits for the reply, but it does report each receiver\'s state back to you.',
     "- list_subagents(): see who exists.",
     "- kill_subagent({name}): terminate agents by name array. Killing an agent also kills every agent it spawned (its whole subtree). You cannot kill 'main'.",
     "- set_status({status, etaMinutes?}): set your short status line (shown to others in list_subagents); empty string clears.",

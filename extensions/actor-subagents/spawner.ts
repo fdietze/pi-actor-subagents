@@ -6,6 +6,7 @@
 import type { RoutedAgentMessage } from "./agent-message.ts";
 import type { StopReason } from "./agent-status.ts";
 import type { AgentHandle, AgentRecord, AgentView, Engine } from "./engine.ts";
+import { formatReceiverStatus } from "./feed.ts";
 import { unknownModelMessage } from "./resolve-model.ts";
 import { formatModelThinking, type ThinkingLevel } from "./thinking-level.ts";
 
@@ -338,8 +339,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		let sent = "";
 		if (spec.message) {
 			const outcome = await engine.route(spawnerName, spec.name, spec.message);
-			if (outcome.outcome === "delivered") sent = " + sent initial message";
-			else if (outcome.outcome === "buffered") sent = " + buffered initial message (agents paused)";
+			if (outcome.outcome === "delivered") {
+				// Same bounded reaction confirmation as send_message: the spawner learns whether the new
+				// agent actually started on its task. Falls back to the delivery snapshot if the agent is
+				// gone by then (killed mid-wait).
+				const status = (await engine.awaitReaction(spec.name)) ?? outcome.receiverStatus;
+				sent = ` + sent initial message (${formatReceiverStatus(status)})`;
+			} else if (outcome.outcome === "buffered") sent = ` + buffered initial message (agents paused: ${outcome.reason})`;
 			else sent = ` (initial message NOT delivered: ${outcome.reason})`;
 		}
 		const model = formatModelThinking(`${resolved.provider}/${resolved.id}`, session.thinkingLevel);

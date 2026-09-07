@@ -7,7 +7,8 @@ import {
 	formatKillResult,
 	formatResumeSummary,
 } from "./feed.ts";
-import type { AgentRecord } from "./engine.ts";
+import type { AgentStatus } from "./agent-status.ts";
+import type { AgentRecord, PauseReason } from "./engine.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 	name: "a",
@@ -151,16 +152,38 @@ test("normalizeTargets: dedupe, trim, drop empty", () => {
 });
 
 test("formatMulticastResult distinguishes delivered, paused-buffered, and failed routes", () => {
-	assert.equal(formatMulticastResult([{ target: "a", outcome: "delivered" }]), "sent to a");
+	assert.equal(
+		formatMulticastResult([{ target: "a", outcome: "delivered", receiverStatus: { kind: "working", phase: "thinking" } }]),
+		"sent to a (thinking)",
+	);
 	assert.equal(
 		formatMulticastResult([
-			{ target: "a", outcome: "delivered" },
-			{ target: "b", outcome: "buffered", reason: "paused" },
+			{ target: "a", outcome: "delivered", receiverStatus: { kind: "working", phase: "tool", tool: "bash" } },
+			{ target: "b", outcome: "buffered", reason: "manual" },
 			{ target: "x", outcome: "failed", reason: "unknown agent 'x'" },
 		]),
-		"sent to a · buffered for b (agents paused) · failed: x: unknown agent 'x'",
+		"sent to a (tool:bash) · buffered for b (paused) · failed: x: unknown agent 'x'",
 	);
 	assert.equal(formatMulticastResult([]), "error: no targets");
+});
+
+test("formatMulticastResult reports each receiver state a delivered message can land in", () => {
+	const sentTo = (receiverStatus: AgentStatus) =>
+		formatMulticastResult([{ target: "a", outcome: "delivered", receiverStatus }]);
+	// Delivered + plain idle means the receiver did not start a turn within the window; it must
+	// not read like a healthy idle agent, since that gap is the signal the sender needs.
+	assert.equal(sentTo({ kind: "idle" }), "sent to a (idle (no reaction))");
+	assert.equal(sentTo({ kind: "idle", outcome: "error" }), "sent to a (error)");
+	assert.equal(sentTo({ kind: "idle", outcome: "truncated" }), "sent to a (truncated)");
+	assert.equal(sentTo({ kind: "spawning" }), "sent to a (spawning)");
+	assert.equal(sentTo({ kind: "working", phase: "writing" }), "sent to a (writing)");
+});
+
+test("formatMulticastResult names the pause cause that parked a message", () => {
+	const buffered = (reason: PauseReason) => formatMulticastResult([{ target: "a", outcome: "buffered", reason }]);
+	assert.equal(buffered("manual"), "buffered for a (paused)");
+	assert.equal(buffered("budget"), "buffered for a (budget pause)");
+	assert.equal(buffered("restored"), "buffered for a (paused after restore)");
 });
 
 test("formatResumeSummary reports scheduler, released buffer, retriggers, and budget", () => {
