@@ -186,10 +186,10 @@ export function makeAgentTools(
         ),
       description:
         "Replying to an agent always means calling this tool with that agent as the target. Ordinary assistant text " +
-        'does not reach the agent. Fire-and-forget message to a list of agents (e.g. ["main"]). It returns as soon as ' +
-        "each receiver has picked the message up (briefly confirmed), never waiting for the reply, and reports every " +
-        "receiver's state back: working/thinking means it started on your message, 'idle (no reaction)' means it took " +
-        "the message but did not start a turn, and buffered/failed mean it is paused or gone. " +
+        'does not reach the agent. Fire-and-forget message to a list of agents (e.g. ["main"]). It never waits for the ' +
+        "reply, only briefly for the receiver to pick the message up, and then reports each receiver's state back: a " +
+        "working state (thinking/writing/tool) means it is running a turn, 'idle (no reaction)' means it took the " +
+        "message but did not start one, and buffered/gone mean it is paused or no longer exists. " +
         "After sending, END YOUR TURN — you are automatically re-woken if a reply arrives. Do NOT poll or wait in a " +
         "loop; inspect only if you suspect a problem.",
       parameters: Type.Object({
@@ -203,20 +203,23 @@ export function makeAgentTools(
       }),
       execute: async (_id, args) => {
         const targets = normalizeTargets(args.to);
-        // Route first (synchronous ordering, one feed event per target), then confirm reactions.
-        const routed: MulticastRouteOutcome[] = [];
+        // Taken BEFORE any delivery: awaitReaction reads the event log from here, so a reaction
+        // that happens between delivery and the wait is observed instead of waited out.
+        const sinceEvent = engine.events.length;
+        // Route first (synchronous ordering, one feed event per target), then observe reactions.
+        const routed = [];
         for (const t of targets) {
           const outcome = await engine.route(selfName, t, args.content);
           routed.push({ target: t, ...outcome });
         }
         // The per-target waits run in PARALLEL: serial waits would cost timeout x targets for a
-        // multicast, turning one bounded confirmation into a long block.
-        const results = await Promise.all(
+        // multicast, turning one bounded observation into a long block.
+        const results: MulticastRouteOutcome[] = await Promise.all(
           routed.map(async (result) => {
-            if (result.outcome !== "delivered") return result; // parked or gone: no turn can follow
-            const reacted = await engine.awaitReaction(result.target);
-            // Gone mid-wait: keep the snapshot taken at delivery rather than inventing a state.
-            return reacted ? { ...result, receiverStatus: reacted } : result;
+            // Parked or gone: no turn can follow, so there is nothing to observe.
+            if (result.outcome !== "delivered") return result;
+            const reaction = await engine.awaitReaction(result.target, sinceEvent);
+            return { target: result.target, outcome: result.outcome, reaction };
           }),
         );
         return {

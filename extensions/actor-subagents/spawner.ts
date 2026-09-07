@@ -338,13 +338,14 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		// 4) Deliver the optional first message atomically (no race; the agent is registered).
 		let sent = "";
 		if (spec.message) {
+			// Captured before delivery so the wait can see a reaction that already happened.
+			const sinceEvent = engine.events.length;
 			const outcome = await engine.route(spawnerName, spec.name, spec.message);
 			if (outcome.outcome === "delivered") {
-				// Same bounded reaction confirmation as send_message: the spawner learns whether the new
-				// agent actually started on its task. Falls back to the delivery snapshot if the agent is
-				// gone by then (killed mid-wait).
-				const status = (await engine.awaitReaction(spec.name)) ?? outcome.receiverStatus;
-				sent = ` + sent initial message (${formatReceiverStatus(status)})`;
+				// Same bounded observation as send_message: the spawner learns whether the new agent
+				// actually started on its task, without waiting for it to finish.
+				const reaction = await engine.awaitReaction(spec.name, sinceEvent);
+				sent = ` + sent initial message (${formatReceiverStatus(reaction)})`;
 			} else if (outcome.outcome === "buffered") sent = ` + buffered initial message (agents paused: ${outcome.reason})`;
 			else sent = ` (initial message NOT delivered: ${outcome.reason})`;
 		}

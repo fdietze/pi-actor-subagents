@@ -8,7 +8,7 @@ import {
 	formatResumeSummary,
 } from "./feed.ts";
 import type { AgentStatus } from "./agent-status.ts";
-import type { AgentRecord, PauseReason } from "./engine.ts";
+import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 	name: "a",
@@ -153,12 +153,18 @@ test("normalizeTargets: dedupe, trim, drop empty", () => {
 
 test("formatMulticastResult distinguishes delivered, paused-buffered, and failed routes", () => {
 	assert.equal(
-		formatMulticastResult([{ target: "a", outcome: "delivered", receiverStatus: { kind: "working", phase: "thinking" } }]),
+		formatMulticastResult([
+			{ target: "a", outcome: "delivered", reaction: { observed: "moving", status: { kind: "working", phase: "thinking" } } },
+		]),
 		"sent to a (thinking)",
 	);
 	assert.equal(
 		formatMulticastResult([
-			{ target: "a", outcome: "delivered", receiverStatus: { kind: "working", phase: "tool", tool: "bash" } },
+			{
+				target: "a",
+				outcome: "delivered",
+				reaction: { observed: "moving", status: { kind: "working", phase: "tool", tool: "bash" } },
+			},
 			{ target: "b", outcome: "buffered", reason: "manual" },
 			{ target: "x", outcome: "failed", reason: "unknown agent 'x'" },
 		]),
@@ -168,15 +174,19 @@ test("formatMulticastResult distinguishes delivered, paused-buffered, and failed
 });
 
 test("formatMulticastResult reports each receiver state a delivered message can land in", () => {
-	const sentTo = (receiverStatus: AgentStatus) =>
-		formatMulticastResult([{ target: "a", outcome: "delivered", receiverStatus }]);
-	// Delivered + plain idle means the receiver did not start a turn within the window; it must
-	// not read like a healthy idle agent, since that gap is the signal the sender needs.
-	assert.equal(sentTo({ kind: "idle" }), "sent to a (idle (no reaction))");
-	assert.equal(sentTo({ kind: "idle", outcome: "error" }), "sent to a (error)");
-	assert.equal(sentTo({ kind: "idle", outcome: "truncated" }), "sent to a (truncated)");
-	assert.equal(sentTo({ kind: "spawning" }), "sent to a (spawning)");
-	assert.equal(sentTo({ kind: "working", phase: "writing" }), "sent to a (writing)");
+	const sentTo = (reaction: Reaction) => formatMulticastResult([{ target: "a", outcome: "delivered", reaction }]);
+	const unmoved = (status: AgentStatus): Reaction => ({ observed: "unmoved", status });
+	// Only an elapsed window with a still-idle agent earns the "no reaction" annotation: that gap
+	// is the signal the sender needs, and claiming it anywhere else would be a false alarm.
+	assert.equal(sentTo(unmoved({ kind: "idle" })), "sent to a (idle (no reaction))");
+	assert.equal(sentTo(unmoved({ kind: "idle", outcome: "error" })), "sent to a (error)");
+	assert.equal(sentTo(unmoved({ kind: "paused" })), "sent to a (paused)"); // paused mid-window
+	assert.equal(sentTo({ observed: "unwatched", status: { kind: "idle" } }), "sent to a (idle)");
+	assert.equal(sentTo({ observed: "moving", status: { kind: "idle", outcome: "truncated" } }), "sent to a (truncated)");
+	assert.equal(sentTo({ observed: "moving", status: { kind: "spawning" } }), "sent to a (spawning)");
+	assert.equal(sentTo({ observed: "moving", status: { kind: "working", phase: "writing" } }), "sent to a (writing)");
+	// Delivered, then killed while we watched: the message's fate and the agent's fate differ.
+	assert.equal(sentTo({ observed: "gone" }), "sent to a (gone)");
 });
 
 test("formatMulticastResult names the pause cause that parked a message", () => {

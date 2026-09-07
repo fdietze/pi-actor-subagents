@@ -2,8 +2,8 @@
  * Pure formatting for the read-only observability of the agents.
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
-import { type AgentStatus, agentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, PauseReason, RouteResult } from "./engine.ts";
+import { agentStatus, formatStatus } from "./agent-status.ts";
+import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
@@ -110,16 +110,26 @@ export interface KillOutcome {
 	killed?: string[];
 }
 
-export type MulticastRouteOutcome = RouteResult & { target: string };
+/**
+ * Per-target result of a multicast send: the message's fate, plus — for a delivered one — what
+ * the bounded wait observed of the receiver. The two axes stay separate all the way to the text.
+ */
+export type MulticastRouteOutcome =
+	| { target: string; outcome: "delivered"; reaction: Reaction }
+	| { target: string; outcome: "buffered"; reason: PauseReason }
+	| { target: string; outcome: "failed"; reason: string };
 
 /**
  * Receiver liveness as reported back to a sender, in the roster's own vocabulary plus one
- * refinement: for a DELIVERED message, plain idle means the receiver did not start a turn within
- * the confirmation window. That "it took the message and did not move" signal is the whole point
- * of confirming a reaction, so it must not read like a healthy idle agent.
+ * refinement: an agent that sat out the whole window without starting a turn is annotated as not
+ * having reacted. Only an actually elapsed window earns that annotation — an unwatched or
+ * killed receiver says what it is instead of being guessed at.
  */
-export function formatReceiverStatus(status: AgentStatus): string {
-	return status.kind === "idle" && status.outcome === undefined ? "idle (no reaction)" : formatStatus(status);
+export function formatReceiverStatus(reaction: Reaction): string {
+	if (reaction.observed === "gone") return "gone";
+	const label = formatStatus(reaction.status);
+	const stillIdle = reaction.status.kind === "idle" && reaction.status.outcome === undefined;
+	return reaction.observed === "unmoved" && stillIdle ? `${label} (no reaction)` : label;
 }
 
 /** Why a message is parked, in the sender's terms: what would have to happen to release it. */
@@ -139,8 +149,7 @@ export function formatMulticastResult(results: MulticastRouteOutcome[]): string 
 	const buffered: string[] = [];
 	const failed: string[] = [];
 	for (const result of results) {
-		if (result.outcome === "delivered")
-			delivered.push(`${result.target} (${formatReceiverStatus(result.receiverStatus)})`);
+		if (result.outcome === "delivered") delivered.push(`${result.target} (${formatReceiverStatus(result.reaction)})`);
 		else if (result.outcome === "buffered") buffered.push(`${result.target} (${BUFFERED_CAUSE[result.reason]})`);
 		else failed.push(`${result.target}: ${result.reason}`);
 	}

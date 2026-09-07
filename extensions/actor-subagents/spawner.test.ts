@@ -100,7 +100,7 @@ test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
 
 	// main -> echo
 	const rt = await engine.route("main", "echo", "ping");
-	assert.deepEqual(rt, { outcome: "delivered", receiverStatus: { kind: "idle" } });
+	assert.deepEqual(rt, { outcome: "delivered" });
 	assert.deepEqual(sessions.get("echo")?.delivered, [createRoutedAgentMessage("main", "ping")]);
 	// Inter-agent delivery uses steer (next-boundary), not followUp.
 	assert.equal(sessions.get("echo")?.lastDeliverAs, "steer");
@@ -317,6 +317,12 @@ test("deliver is fire-and-forget: does not await the target's turn", async () =>
 	// initial message must still resolve — otherwise the spawn_subagent tool would hang.
 	class BlockingSession extends FakeSession {
 		async sendAgentMessage() {
+			// A never-resolving delivery IS a running turn, so it announces one like a real session
+			// would; otherwise the spawn's reaction window would be spent here for nothing.
+			setTimeout(() => {
+				this.emit("agent_start");
+				this.emit("turn_start");
+			}, 0);
 			return new Promise<void>(() => {});
 		}
 	}
@@ -327,7 +333,7 @@ test("deliver is fire-and-forget: does not await the target's turn", async () =>
 	});
 	const r = await spawner.spawnAgent({ name: "slow", systemPrompt: "r", message: "go" }, "main");
 	assert.equal(r.ok, true);
-	assert.match(r.msg, /sent initial message/);
+	assert.match(r.msg, /sent initial message \(thinking\)/);
 });
 
 test("deliver failure surfaces as an engine error event", async () => {
@@ -343,8 +349,10 @@ test("deliver failure surfaces as an engine error event", async () => {
 		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
 		createSession: async () => ({ session: new FailingSession() }),
 	});
-	await spawner.spawnAgent({ name: "bad", systemPrompt: "r", message: "go" }, "main");
-	await new Promise((res) => setTimeout(res, 0)); // let the .catch microtask run
+	// The failure lands between delivery and the reaction wait; the wait must find it in the event
+	// log rather than sitting out its whole window (which would make this spawn feel hung).
+	const r = await spawner.spawnAgent({ name: "bad", systemPrompt: "r", message: "go" }, "main");
+	assert.match(r.msg, /sent initial message \(error\)/);
 	const err = engine.events.find((e) => e.type === "error");
 	assert.ok(err, "expected an error event");
 	assert.equal((err as { name: string }).name, "bad");

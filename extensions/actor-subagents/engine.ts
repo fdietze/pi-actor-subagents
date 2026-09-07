@@ -152,26 +152,38 @@ export type CheckResult = { ok: true } | { ok: false; reason: string };
 export type KillResult = { ok: true; killed: string[] } | { ok: false; reason: string };
 
 /**
- * Structured routing result; callers never infer delivery state from display prose.
- *
- * Two orthogonal axes: `outcome` is the MESSAGE's fate (accepted / parked / gone), and
- * `receiverStatus` is the RECEIVER's liveness at that moment. Keeping them apart is what lets a
- * sender tell "delivered into a working agent" from "delivered into an agent that never moved".
- * The status rides only on `delivered`: a buffered target's status is trivially "paused" and its
- * `reason` says more, and a failed target has no record at all (make illegal states
- * unrepresentable).
+ * Structured routing result: the MESSAGE's fate only. The RECEIVER's liveness is the separate,
+ * orthogonal axis reported by `awaitReaction` (see `Reaction`), so neither answer has to be
+ * inferred from the other — or from display prose.
  */
 export type RouteResult =
-	| { outcome: "delivered"; receiverStatus: AgentStatus }
+	| { outcome: "delivered" }
 	| { outcome: "buffered"; reason: PauseReason }
 	| { outcome: "failed"; reason: string };
 
 /**
  * How long a sender waits for a delivered-to agent to REACT (start a turn or fail) before
- * reporting the plain snapshot. Short on purpose: it confirms pickup, never completion, so the
+ * reporting what it sees. Short on purpose: it observes pickup, never completion, so the
  * fire-and-forget actor model stays intact.
  */
 export const REACTION_TIMEOUT_MS = 3000;
+
+/**
+ * What a bounded reaction wait OBSERVED, kept apart from what the agent IS (`AgentStatus`).
+ * The distinction matters because only one of these cases licenses the claim "it did not react":
+ * a full window that elapsed while the agent never moved. Folding that claim into the status
+ * itself would make an unwatched or already-finished agent look stuck (The Map Is Not the
+ * Territory).
+ */
+export type Reaction =
+	/** A turn started or an error arrived — or the agent was already mid-turn. It is alive. */
+	| { observed: "moving"; status: AgentStatus }
+	/** The whole window elapsed with no turn and no error: it took the message and sat still. */
+	| { observed: "unmoved"; status: AgentStatus }
+	/** No window was watched at all (see `awaitReaction` on 'main'): the status is a bare snapshot. */
+	| { observed: "unwatched"; status: AgentStatus }
+	/** The agent no longer exists (killed while we waited); it has no status to report. */
+	| { observed: "gone" };
 
 /** Counts work released by resume without claiming asynchronous delivery completed. */
 export interface EngineResumeResult {
@@ -455,7 +467,8 @@ export class Engine {
 
 	/** Is this agent stopped? Either cause blocks its turns and buffers its incoming messages. */
 	private isAgentPaused(rec: AgentRecord): boolean {
-		return this.budgetPaused || rec.paused === true;
+		// Single source of truth: "paused" is exactly "there is a pause cause".
+		return this.pauseCauseOf(rec) !== undefined;
 	}
 
 	/**
@@ -490,35 +503,50 @@ export class Engine {
 	 * from an agent that will never move. Waiting for the turn to START (never to finish) buys that
 	 * distinction without breaking the fire-and-forget architecture.
 	 */
-	async awaitReaction(name: string, timeoutMs: number = REACTION_TIMEOUT_MS): Promise<AgentStatus | undefined> {
+	async awaitReaction(
+		name: string,
+		sinceEvent: number,
+		timeoutMs: number = REACTION_TIMEOUT_MS,
+	): Promise<Reaction> {
+		const settle = (observed: "moving" | "unmoved" | "unwatched"): Reaction => {
+			const status = this.statusOf(name);
+			return status ? { observed, status } : { observed: "gone" };
+		};
 		// 'main' never emits a `turn` event: only background sessions run through recordTurnStart,
 		// the sole emitter. Waiting on the foreground would therefore always burn the full timeout,
 		// and it is pointless anyway — 'main' is the human's own chat, not a receiver that can be
-		// stuck or broken. Its record's activity is tracked live, so the snapshot is already honest.
-		if (name !== "main")
-			await new Promise<void>((resolve) => {
-				let settled = false;
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				const finish = () => {
-					if (settled) return;
-					settled = true;
-					if (timer) clearTimeout(timer);
-					unsubscribe();
-					resolve();
-				};
-				// Subscribe BEFORE inspecting the current state: the reverse order has a window in which
-				// the reaction happens unobserved and the wait runs to its full timeout.
-				const unsubscribe = this.subscribe((e) => {
-					if (e.type === "turn" || e.type === "error" || e.type === "kill") {
-						if (e.name === name) finish();
-					}
-				});
-				timer = setTimeout(finish, timeoutMs);
-				// Already reacting (or already gone) — nothing to wait for.
-				const rec = this.agents.get(name);
-				if (!rec || rec.activity !== undefined) finish();
+		// stuck or broken. Its record's activity is tracked live, so the snapshot is already honest,
+		// and "unwatched" keeps the caller from reading that snapshot as an observation.
+		if (name === "main") return settle("unwatched");
+		// The event log closes the race with the delivery that triggers the reaction: `sinceEvent` is
+		// taken BEFORE routing, so a turn or failure that lands between delivery and this call is
+		// found here instead of being waited out. (A synchronous delivery failure does exactly that.)
+		const reacted = (e: AgentEvent): boolean =>
+			(e.type === "turn" || e.type === "error" || e.type === "kill") && e.name === name;
+		for (let i = Math.max(0, sinceEvent); i < this.events.length; i++) {
+			const event = this.events[i];
+			if (event && reacted(event)) return settle("moving");
+		}
+		const rec = this.agents.get(name);
+		if (!rec) return { observed: "gone" };
+		// Already mid-turn: it is demonstrably alive, and its steered message is picked up at the next
+		// turn boundary. Waiting for that boundary would cost the full window to learn nothing new.
+		if (rec.activity !== undefined) return settle("moving");
+		return new Promise<Reaction>((resolve) => {
+			let settled = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const finish = (observed: "moving" | "unmoved") => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer); // never leave a timer (or a listener) behind
+				unsubscribe();
+				resolve(settle(observed));
+			};
+			const unsubscribe = this.subscribe((e) => {
+				if (reacted(e)) finish("moving");
 			});
-		return this.statusOf(name);
+			timer = setTimeout(() => finish("unmoved"), timeoutMs);
+		});
 	}
 
 	/**
@@ -621,17 +649,16 @@ export class Engine {
 		const message = createRoutedAgentMessage(from, content);
 		// One tail for both outcomes: a paused target parks the message, a live one takes it.
 		// Everything after that (edge count, activity, feed event) is identical, so it is written once.
-		const buffered = this.isAgentPaused(target);
-		if (buffered) (target.pausedInbox ??= []).push(message);
+		// The cause is read ONCE, before the delivery await, and the reported outcome comes from that
+		// same decision: a pause landing while `deliver` is in flight must not turn a message the
+		// session already has into a "buffered" report (the map has to match what actually happened).
+		const cause = this.pauseCauseOf(target);
+		if (cause) (target.pausedInbox ??= []).push(message);
 		else await target.handle.deliver(message);
 		target.lastActivity = Date.now();
 		this.countEdge(from, to);
-		this.emit({ type: "route", from, to, preview: previewOf(content), buffered, ts: Date.now() });
-		const cause = this.pauseCauseOf(target);
-		// `buffered === (cause !== undefined)` by construction; the check is what proves it to the
-		// type system rather than asserting non-null.
-		if (cause) return { outcome: "buffered", reason: cause };
-		return { outcome: "delivered", receiverStatus: agentStatus(target) };
+		this.emit({ type: "route", from, to, preview: previewOf(content), buffered: cause !== undefined, ts: Date.now() });
+		return cause ? { outcome: "buffered", reason: cause } : { outcome: "delivered" };
 	}
 
 	/**

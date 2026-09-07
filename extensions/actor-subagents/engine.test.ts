@@ -88,8 +88,7 @@ test("route delivers structured agent message to existing agent when idle", asyn
 	};
 	e.addAgent({ ...mainRecord(), name: "coder", handle, depth: 1 });
 	const r = await e.route("main", "coder", "fix the bug");
-	// The snapshot is taken at delivery: the kicked agent's turn has not started yet.
-	assert.deepEqual(r, { outcome: "delivered", receiverStatus: { kind: "idle" } });
+	assert.deepEqual(r, { outcome: "delivered" });
 	assert.deepEqual(delivered, createRoutedAgentMessage("main", "fix the bug"));
 	assert.equal(e.events.at(-1)?.type, "route");
 });
@@ -103,7 +102,7 @@ test("route reports delivery when the target is already mid-turn", async () => {
 	e.addAgent({ ...mainRecord(), name: "busy", handle, depth: 1 });
 	e.setActivity("busy", "tool", "bash");
 	const r = await e.route("main", "busy", "hi");
-	assert.deepEqual(r, { outcome: "delivered", receiverStatus: { kind: "working", phase: "tool", tool: "bash" } });
+	assert.deepEqual(r, { outcome: "delivered" });
 });
 
 test("route fails for unknown agent", async () => {
@@ -303,8 +302,7 @@ test("route to a pending agent buffers; attach flushes to the real handle (R1)",
 	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
 	e.reserve("a", "main");
 	const r = await e.route("main", "a", "ping");
-	// No longer unknown; the reservation reports itself as still spawning.
-	assert.deepEqual(r, { outcome: "delivered", receiverStatus: { kind: "spawning" } });
+	assert.deepEqual(r, { outcome: "delivered" }); // no longer unknown
 	const delivered: RoutedAgentMessage[] = [];
 	e.attach("a", {
 		model: "test/m",
@@ -616,7 +614,7 @@ test("pause(names) stops only the named agents; the rest keep running", async ()
 	assert.equal(e.recordTurnStart("a").abort, true);
 	assert.equal(e.recordTurnStart("b").abort, false);
 	assert.deepEqual(await e.route("main", "a", "hi"), { outcome: "buffered", reason: "manual" });
-	assert.deepEqual(await e.route("main", "b", "hi"), { outcome: "delivered", receiverStatus: { kind: "idle" } });
+	assert.deepEqual(await e.route("main", "b", "hi"), { outcome: "delivered" });
 	assert.deepEqual(delivered, ["b"]);
 	assert.equal(formatStatus(agentStatus(e.get("a")!)), "paused"); // idle-but-paused reads as paused
 	assert.equal(formatStatus(agentStatus(e.get("b")!)), "idle");
@@ -796,62 +794,97 @@ test("deliverUser refuses 'main': the human is already typing in that chat", () 
 	assert.match((r as { reason: string }).reason, /main/);
 });
 
-// --- Reaction confirmation (awaitReaction) -------------------------------------------------
-// The wait exists because route()'s snapshot is taken before the target's turn can start:
-// "delivered + idle" is otherwise indistinguishable from "delivered + never moved".
+// --- Reaction observation (awaitReaction) --------------------------------------------------
+// route() returns before the target's turn can start, so "delivered + idle" alone cannot tell a
+// working agent from one that never moves. awaitReaction supplies that second axis.
 
-test("awaitReaction resolves as working when the target starts its turn", async () => {
+/** Fails loudly instead of hanging when a call that must not block does block. */
+async function withoutWaiting<T>(what: string, work: Promise<T>): Promise<T> {
+	let watchdog: ReturnType<typeof setTimeout> | undefined;
+	const guard = new Promise<never>((_, reject) => {
+		watchdog = setTimeout(() => reject(new Error(`${what} waited instead of returning`)), 2000);
+	});
+	try {
+		return await Promise.race([work, guard]);
+	} finally {
+		if (watchdog) clearTimeout(watchdog);
+	}
+}
+
+test("awaitReaction reports the target as moving when it starts its turn", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });
-	const pending = e.awaitReaction("w", 1000);
+	const pending = e.awaitReaction("w", e.events.length, 60_000);
 	e.setActivity("w", "thinking"); // the session's agent_start
 	e.recordTurnStart("w"); // emits the `turn` event the wait listens for
-	assert.deepEqual(await pending, { kind: "working", phase: "thinking", tool: undefined });
+	assert.deepEqual(await withoutWaiting("awaitReaction", pending), {
+		observed: "moving",
+		status: { kind: "working", phase: "thinking", tool: undefined },
+	});
 });
 
-test("awaitReaction resolves as idle-error when the target's turn fails", async () => {
+test("awaitReaction reports a failing turn as moving with the error status", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });
-	const pending = e.awaitReaction("w", 1000);
+	const pending = e.awaitReaction("w", e.events.length, 60_000);
 	e.reportError("w", "boom");
-	assert.deepEqual(await pending, { kind: "idle", outcome: "error" });
+	assert.deepEqual(await withoutWaiting("awaitReaction", pending), {
+		observed: "moving",
+		status: { kind: "idle", outcome: "error" },
+	});
 });
 
-test("awaitReaction times out on an unreacting target and ignores other agents' turns", async () => {
+test("awaitReaction sees a reaction that happened before the wait started", async () => {
+	const e = new Engine(caps);
+	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });
+	// The real gap: delivery can fail (or a turn can start) between route() and the wait. The
+	// event log, read from the pre-delivery mark, closes it — otherwise this costs a full window.
+	const sinceEvent = e.events.length;
+	e.reportError("w", "delivery failed");
+	assert.deepEqual(await withoutWaiting("awaitReaction", e.awaitReaction("w", sinceEvent, 60_000)), {
+		observed: "moving",
+		status: { kind: "idle", outcome: "error" },
+	});
+});
+
+test("awaitReaction reports an unmoved target and ignores other agents' turns", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "quiet", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "noisy", depth: 1 });
-	const pending = e.awaitReaction("quiet", 20);
+	const pending = e.awaitReaction("quiet", e.events.length, 20);
 	e.recordTurnStart("noisy"); // someone else reacting must not end this wait
-	// Plain idle after the window is the "took the message and did not move" signal.
-	assert.deepEqual(await pending, { kind: "idle" });
+	// "unmoved + idle" is the signal the whole wait exists for: it took the message and sat still.
+	assert.deepEqual(await pending, { observed: "unmoved", status: { kind: "idle" } });
 });
 
 test("awaitReaction reports the agent as gone when it is killed mid-wait", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "doomed", depth: 1 });
-	const pending = e.awaitReaction("doomed", 1000);
+	const pending = e.awaitReaction("doomed", e.events.length, 60_000);
 	await e.kill("doomed");
-	assert.equal(await pending, undefined);
+	assert.deepEqual(await withoutWaiting("awaitReaction", pending), { observed: "gone" });
 });
 
 test("awaitReaction returns at once for an agent that is already working", async () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "busy", depth: 1 });
 	e.setActivity("busy", "writing");
-	const started = Date.now();
-	// Race safety: the reaction may predate the subscription, so the current state is checked
-	// once after subscribing. A long timeout would hang here if that check were missing.
-	assert.deepEqual(await e.awaitReaction("busy", 60_000), { kind: "working", phase: "writing", tool: undefined });
-	assert.ok(Date.now() - started < 1000);
+	// A mid-turn agent is demonstrably alive; waiting for its next turn boundary would spend the
+	// whole window to learn nothing new.
+	assert.deepEqual(await withoutWaiting("awaitReaction", e.awaitReaction("busy", e.events.length, 60_000)), {
+		observed: "moving",
+		status: { kind: "working", phase: "writing", tool: undefined },
+	});
 });
 
-test("awaitReaction never waits on 'main' (the foreground emits no turn events)", async () => {
+test("awaitReaction never waits on 'main' and does not claim to have watched it", async () => {
 	const e = new Engine(caps);
 	e.addAgent(mainRecord());
-	const started = Date.now();
-	assert.deepEqual(await e.awaitReaction("main", 60_000), { kind: "idle" });
-	assert.ok(Date.now() - started < 1000);
+	// The foreground emits no turn events, so its idle snapshot must not be read as "no reaction".
+	assert.deepEqual(await withoutWaiting("awaitReaction", e.awaitReaction("main", e.events.length, 60_000)), {
+		observed: "unwatched",
+		status: { kind: "idle" },
+	});
 });
 
 test("statusOf folds the swarm-wide pause into the per-record status", () => {
@@ -863,4 +896,24 @@ test("statusOf folds the swarm-wide pause into the per-record status", () => {
 	assert.deepEqual(agentStatus(e.get("a")!), { kind: "idle" });
 	assert.deepEqual(e.statusOf("a"), { kind: "paused" });
 	assert.equal(e.statusOf("ghost"), undefined);
+});
+
+test("route reports the fate decided at delivery, not the pause state after it", async () => {
+	const e = new Engine(caps);
+	let release: (() => void) | undefined;
+	e.addAgent({
+		...mainRecord(),
+		name: "slow",
+		depth: 1,
+		handle: {
+			deliver: () => new Promise<void>((resolve) => (release = resolve)),
+			abort: async () => {},
+		},
+	});
+	const routed = e.route("main", "slow", "hi");
+	e.pause(["slow"]); // pause lands while the handle is still delivering
+	release?.();
+	// The session already has the message, so calling it "buffered" would be a lie.
+	assert.deepEqual(await routed, { outcome: "delivered" });
+	assert.equal(e.get("slow")?.pausedInbox, undefined);
 });

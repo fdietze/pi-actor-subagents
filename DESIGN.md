@@ -25,7 +25,7 @@ The engine owns agent records, spawn parentage, directed mailboxes, activity, st
 
 The panel's input box is the human speaking directly to the selected agent: it arrives as a real user turn, and is refused rather than buffered when the agent is paused or still spawning.
 
-Sending reports two orthogonal things back to the sender: the message's fate (delivered, buffered, failed) and the receiver's own status. Since a just-woken idle agent has not started its turn at the instant routing returns, `send_message` and a spawn's initial message wait briefly on the engine's event stream for that agent's first turn or error before reporting — never for the turn to finish, so delivery stays fire-and-forget and a delivered-but-still-idle receiver becomes visible as one that did not react.
+Sending reports two orthogonal things back to the sender: the message's fate (delivered, buffered, failed) and the receiver's liveness. Since a just-woken agent has not started its turn at the instant routing returns, `send_message` and a spawn's initial message watch the engine's event log — from a mark taken before delivery, so nothing is missed — for that agent's first turn or error, bounded by a short window and never until the turn finishes. Delivery therefore stays fire-and-forget, while a receiver that took the message and never moved becomes visible as one that did not react; a window that was never watched, or an agent killed meanwhile, is reported as such instead of being guessed at.
 
 Messages use one structured custom pi message type. The structure preserves sender and recipient provenance for routing, model context, and TUI rendering. A live foreground sink on `globalThis` prevents a reloaded extension instance from delivering through a stale pi handle.
 
