@@ -20,19 +20,24 @@ The interactive UI shows a compact roster and provides:
 
 Saved swarms live beside the main pi session under `subagents/<main-session-id>/` and are restored when that session returns.
 
-## Optional child extensions
+## Settings
 
-Child extension loading is explicit and fail-closed. Put the policy at `$XDG_CONFIG_HOME/pi/actor-subagents/child-extensions.json` (normally `~/.config/pi/actor-subagents/child-extensions.json`):
+Optional, at `~/.pi/agent/actor-subagents/settings.json` (inside pi's agent directory):
 
 ```json
 {
-  "extensions": [
+  "maxAgents": 8,
+  "maxSpawnDepth": 3,
+  "turnBudget": 200,
+  "childExtensions": [
     "/absolute/path/to/an/extension"
   ]
 }
 ```
 
-Only non-empty string entries are accepted. A missing, unreadable, malformed, or invalid policy grants no optional child extensions. Do not list actor-subagents itself: children already receive its orchestration tools directly.
+`maxAgents`, `maxSpawnDepth`, and `turnBudget` are the swarm's limits: background agents alive at once, spawn-tree depth, and total agent turns before the swarm pauses and reports back to the main agent. The values above are the defaults. Each value must be a positive integer; anything else (including `0`) falls back to that key's default on its own, so a partial file is fine. New limits take effect when pi next starts.
+
+`childExtensions` grants child sessions extra pi extensions; loading is explicit and fail-closed. Only non-empty string entries are accepted, and anything else — a missing, unreadable, malformed, or invalid file — grants none. Changes apply to the next spawned agent. Do not list actor-subagents itself: children already receive its orchestration tools directly.
 
 ## Development
 

@@ -19,9 +19,11 @@ npm pack --dry-run
 
 `extensions/actor-subagents/index.ts` is the pi entry point and imperative shell. It registers the foreground tools, commands, renderer, and lifecycle handlers; creates headless child sessions through the pi SDK; and connects them to the pure orchestration core.
 
-A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. The entry point reads the explicit XDG policy on every spawn and supplies only those additional paths. Missing or invalid policy is an empty capability set.
+A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. The entry point reads `settings.json` on every spawn and supplies only the `childExtensions` paths. Missing or invalid settings are an empty capability set.
 
-Every tool result carries the wall-clock times it started and finished, so agents can measure elapsed time and a tool's own duration (which is what `set_status`'s `etaMinutes` needs). The start time is captured at `tool_call` and paired to the result by call id. A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the XDG capability policy. Both registrations apply the pure `tool-timestamp.ts`.
+`settings.ts` parses that one file (`parseSettings`, pure). The file is flat — `maxAgents`, `maxSpawnDepth`, `turnBudget`, `childExtensions` at the top level — while the parsed `Settings` groups the three limits as `caps`, which is what the engine is constructed from. The limits fall back per field to `DEFAULT_CAPS` and are read once, when `getEngine()` builds the reload-surviving singleton — changed limits therefore apply at the next pi start. `childExtensions` is fail-closed and re-read per spawn.
+
+Every tool result carries the wall-clock times it started and finished, so agents can measure elapsed time and a tool's own duration (which is what `set_status`'s `etaMinutes` needs). The start time is captured at `tool_call` and paired to the result by call id. A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the configured `childExtensions` policy. Both registrations apply the pure `tool-timestamp.ts`.
 
 Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
 
@@ -33,7 +35,7 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 - Agent tools: `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, `resume_subagents`
 - Commands: `/subagents`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`
 - Custom message type and details shape: `agent-message.ts`
-- Child capability policy: `$XDG_CONFIG_HOME/pi/actor-subagents/child-extensions.json`
+- Settings (caps and child capability policy): `<pi agent dir>/actor-subagents/settings.json`, the agent dir being the SDK's `getAgentDir()` (normally `~/.pi/agent`)
 - Persistence: `<main-session-dir>/subagents/<main-session-id>/`
 - Process reload compatibility: every `__subagents*` `globalThis` key in `index.ts`
 
@@ -43,6 +45,7 @@ There are no open ports or separate services. The extension has the same process
 
 - `index.ts`: pi integration, lifecycle, child construction, persistence orchestration, commands and UI wiring
 - `engine.ts`: actor registry, spawn tree, scheduling, routing, per-agent and swarm-wide pause, kill/retune state
+- `settings.ts`: pure parser for `settings.json` (caps + child extension policy) and the default caps
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration

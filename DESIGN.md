@@ -15,13 +15,13 @@ Each child session is created with:
 - orchestration tools supplied directly as pi `customTools`;
 - recursive extension discovery disabled;
 - the tool-result timestamp hook, registered in process as an inline extension factory; and
-- the extension paths granted by the XDG child policy.
+- the extension paths granted by the `childExtensions` policy in `settings.json`.
 
 A pi hook only fires in the session that registered it, so the timestamp that lets an agent perceive elapsed time has to be installed into every child separately. It travels the same in-process route as the orchestration tools rather than as a file path, which keeps the granted-paths list an exact picture of the foreign-capability policy. The policy is read on every spawn. Parsing is fail-closed: missing, unreadable, malformed, or structurally invalid input becomes an empty list. actor-subagents itself is not loaded recursively in children because its tools are already injected.
 
 ## Actor model
 
-The engine owns agent records, spawn parentage, directed mailboxes, activity, status, turn budget, and lifecycle transitions. Spawning reserves a unique name and enforces the agent-count and depth caps before asynchronous child creation. Killing an agent cascades through its descendants. Pausing has two distinct causes: a manual pause of named agents (all of them when none are named) and a swarm-wide stop from the turn budget or a restored session, which alone escalates to `main` and alone re-arms on a full resume. Either way delivery buffers without losing ordering, and resuming releases each mailbox as one ordered batch. Aborting an agent cancels its running bash command before stopping its agent loop, so a pause stops work already in flight.
+The engine owns agent records, spawn parentage, directed mailboxes, activity, status, turn budget, and lifecycle transitions. Spawning reserves a unique name and enforces the agent-count and depth caps before asynchronous child creation. The caps come from the same `settings.json` and are fixed for the engine's lifetime, because a swarm's limits cannot meaningfully change under the agents already running against them; unlike the capability policy they default per field rather than failing closed. Killing an agent cascades through its descendants. Pausing has two distinct causes: a manual pause of named agents (all of them when none are named) and a swarm-wide stop from the turn budget or a restored session, which alone escalates to `main` and alone re-arms on a full resume. Either way delivery buffers without losing ordering, and resuming releases each mailbox as one ordered batch. Aborting an agent cancels its running bash command before stopping its agent loop, so a pause stops work already in flight.
 
 The panel's input box is the human speaking directly to the selected agent: it arrives as a real user turn, and is refused rather than buffered when the agent is paused or still spawning.
 
@@ -47,4 +47,4 @@ The engine, foreground sink, foreground state, and restore guard use versioned `
 
 The agent-facing tools are `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, and `resume_subagents`. Foreground commands are `/subagents`, `/subagents-pause`, `/subagents-resume`, and `/subagents-kill`. Their names, result/message formats, roster format, domain vocabulary, and persistence layout are compatibility surfaces.
 
-The package has no service or network interface of its own. Model traffic and credentials are handled by pi. The extension inherits pi's process authority, so the explicit child-extension policy is the primary capability boundary introduced here.
+The package has no service or network interface of its own. Model traffic and credentials are handled by pi. The extension inherits pi's process authority, so the explicit `childExtensions` policy in `<pi agent dir>/actor-subagents/settings.json` is the primary capability boundary introduced here.
