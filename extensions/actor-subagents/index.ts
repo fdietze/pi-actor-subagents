@@ -5,12 +5,12 @@
  * Design: ../../../DESIGN.md
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionAPI,
+  getAgentDir,
   ModelRegistry,
   ModelRuntime,
   SessionManager,
@@ -29,7 +29,6 @@ import { orderAgents } from "./agent-order.ts";
 import { agentStatus } from "./agent-status.ts";
 import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
-import { parseChildExtensionPolicy } from "./child-extension-policy.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
 import {
   formatKillResult,
@@ -59,6 +58,7 @@ import {
   unknownModelMessage,
 } from "./resolve-model.ts";
 import { createAgentModelSetter } from "./set-agent-model.ts";
+import { parseSettings, type Settings } from "./settings.ts";
 import {
   createSpawner,
   type ResolvedModel,
@@ -66,9 +66,6 @@ import {
 } from "./spawner.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "./thinking-level.ts";
 import { timestampToolResult } from "./tool-timestamp.ts";
-
-// Caps — Phase 1: module constants (binding them to settings is a trivial later addition).
-const CAPS = { maxAgents: 8, maxSpawnDepth: 3, turnBudget: 200 };
 
 /**
  * Gives one session a sense of elapsed time by stamping the wall-clock start and finish times
@@ -93,20 +90,18 @@ function registerToolTimestamps(pi: ExtensionAPI): void {
   });
 }
 
-/** Read the XDG-managed child capability policy on every spawn; malformed/missing means none. */
-function readChildExtensionPolicy(): string[] {
-  const configHome =
-    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
-  const policyFile = path.join(
-    configHome,
-    "pi",
-    "actor-subagents",
-    "child-extensions.json",
-  );
+/**
+ * Read this extension's settings, next to pi's own agent config (getAgentDir() honors pi's
+ * agent-dir override, so a test or alternate profile stays self-contained).
+ * A missing or unreadable file is the same as an empty one: parseSettings decides what that
+ * means per field (defaults for caps, nothing for childExtensions).
+ */
+function readSettings(): Settings {
+  const file = path.join(getAgentDir(), "actor-subagents", "settings.json");
   try {
-    return parseChildExtensionPolicy(fs.readFileSync(policyFile, "utf8"));
+    return parseSettings(fs.readFileSync(file, "utf8"));
   } catch {
-    return [];
+    return parseSettings("");
   }
 }
 
@@ -154,11 +149,15 @@ const BUDGET_ESCALATION = (total: number) =>
 //      only when it lifts that stop.
 // v21: Engine gains awaitReaction + statusOf + pauseCauseOf (send/spawn report the receiver's
 //      state); route's buffered reason widens from "paused" to PauseReason.
-const ENGINE_KEY = "__subagentsEngine_v21";
+// v22: Engine gains the maxAgents getter (panel header) and takes its caps from settings.json.
+const ENGINE_KEY = "__subagentsEngine_v22";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
-  if (!g[ENGINE_KEY]) g[ENGINE_KEY] = new Engine(CAPS);
+  // Caps are read once, when this singleton is created: the swarm's limits stay fixed for as
+  // long as its agents live, so editing settings.json applies at the next pi start (or /reload,
+  // which only rebuilds the engine when ENGINE_KEY changed).
+  if (!g[ENGINE_KEY]) g[ENGINE_KEY] = new Engine(readSettings().caps);
   return g[ENGINE_KEY] as Engine;
 }
 
@@ -249,10 +248,11 @@ export default function subagents(pi: ExtensionAPI) {
   });
 
   // Background agents share main's real agentDir so they inherit the SAME global AGENTS.md
-  // and global skills. Recursive discovery stays disabled; only the explicit XDG policy is
-  // loaded, so interactive or orchestration extensions cannot enter a headless child by
-  // accident (least capability, without embedding personal extension names in this code).
-  const realAgentDir = path.join(os.homedir(), ".pi/agent");
+  // and global skills. Recursive discovery stays disabled; only the extensions listed in
+  // settings.json are loaded, so interactive or orchestration extensions cannot enter a
+  // headless child by accident (least capability, without embedding personal extension
+  // names in this code).
+  const realAgentDir = getAgentDir();
 
   // Where this main session's background agent files + roster live. Set at session_start
   // from the main session; undefined until then (and for an in-memory main session) -> new
@@ -471,13 +471,15 @@ export default function subagents(pi: ExtensionAPI) {
       agentDir: realAgentDir,
       settingsManager: childSettings,
       // noExtensions disables discovery; explicit additional paths are still loaded.
-      // additionalExtensionPaths stays exactly the XDG policy, so that array remains a
+      // additionalExtensionPaths stays exactly the configured policy, so that array remains a
       // faithful picture of the FOREIGN capability boundary. Our own always-on hook rides
       // the separate in-process factory channel (like the orchestration customTools), which
       // cannot fail to resolve and, loading after the path extensions, appends the stamp
       // last — a policy-granted extension cannot clobber it.
+      // Re-read per spawn (unlike the caps), so revoking a capability takes effect on the
+      // next child rather than at the next pi start.
       noExtensions: true,
-      additionalExtensionPaths: readChildExtensionPolicy(),
+      additionalExtensionPaths: readSettings().childExtensions,
       extensionFactories: [
         { name: "subagent-timestamps", factory: registerToolTimestamps },
       ],

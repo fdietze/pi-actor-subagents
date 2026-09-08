@@ -8,6 +8,7 @@ import {
 	type RoutedAgentMessage,
 } from "./agent-message.ts";
 import { type AgentActivity, type AgentStatus, agentStatus, type StopReason } from "./agent-status.ts";
+import type { Caps } from "./settings.ts";
 import type { ThinkingLevel } from "./thinking-level.ts";
 
 export interface AgentHandle {
@@ -116,12 +117,6 @@ export interface AgentRecord {
 	reconfigure?: (change: { model?: ModelChange; thinkingLevel?: ThinkingLevel }) => Promise<AgentTuning>;
 	/** Messages buffered while the swarm is paused. Released on resume. */
 	pausedInbox?: RoutedAgentMessage[];
-}
-
-export interface Caps {
-	maxAgents: number; // excluding 'main'
-	maxSpawnDepth: number;
-	turnBudget: number; // global across all background agents
 }
 
 export type AgentEvent =
@@ -250,6 +245,11 @@ export class Engine {
 
 	get budget(): { used: number; total: number } {
 		return { used: this.turnsUsed, total: this.caps.turnBudget };
+	}
+
+	/** The spawn limit canSpawn enforces, exposed so the UI can show it next to the live count. */
+	get maxAgents(): number {
+		return this.caps.maxAgents;
 	}
 
 	canSpawn(name: string, spawnerDepth: number): CheckResult {
