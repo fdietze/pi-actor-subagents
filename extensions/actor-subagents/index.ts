@@ -150,7 +150,11 @@ const BUDGET_ESCALATION = (total: number) =>
 // v21: Engine gains awaitReaction + statusOf + pauseCauseOf (send/spawn report the receiver's
 //      state); route's buffered reason widens from "paused" to PauseReason.
 // v22: Engine gains the maxAgents getter (panel header) and takes its caps from settings.json.
-const ENGINE_KEY = "__subagentsEngine_v22";
+// v23: setStopReason(name, reason, detail?) owns the single edge-triggered `error` emit (one per
+//      failed turn, both the thrown-exception and the retries-exhausted path); reportError no
+//      longer emits itself. A v22 instance would miss the retries-exhausted notification and
+//      double-report the exception one, so it must not survive into this code.
+const ENGINE_KEY = "__subagentsEngine_v23";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -199,27 +203,30 @@ function mainState(): MainLiveState {
   return s;
 }
 
-// The roster widget hands pi fully composed lines that were truncated to the width they were
-// built at, and pi re-draws those STORED lines after a resize — a line from a wider terminal then
-// trips its "Rendered line exceeds terminal width" check. So the widget is rebuilt on resize.
-// The listener reference lives on globalThis because a /reload runs this module again with fresh
-// closures: each load removes the previous instance's listener before installing its own, so the
-// listeners never stack and no dead closure keeps writing through a stale ui.
-const RESIZE_LISTENER_KEY = "__subagentsResizeListener_v1";
-function installResizeListener(listener: () => void): void {
+/**
+ * Hooks that attach to things OUTLIVING one extension load — the process's stdout and the engine
+ * singleton — while this module is evaluated again on every /reload with fresh closures. Exactly
+ * one load may own them at a time: each load disposes the previous owner's hooks before
+ * installing its own, otherwise every reload adds another subscriber and a single engine event
+ * would be handled once per load (duplicate parent notifications, duplicate escalations) through
+ * closures whose `ui` is already dead.
+ *
+ * The swap on load is what guarantees this; the shutdown-time disposal below is a courtesy for
+ * the case where no further load follows, so nothing depends on session_shutdown firing.
+ */
+const PROCESS_HOOKS_KEY = "__subagentsProcessHooks_v1";
+function installProcessHooks(dispose: () => void): void {
   const g = globalThis as Record<string, unknown>;
-  const previous = g[RESIZE_LISTENER_KEY] as (() => void) | undefined;
-  if (previous) process.stdout.off("resize", previous);
-  process.stdout.on("resize", listener);
-  g[RESIZE_LISTENER_KEY] = listener;
+  (g[PROCESS_HOOKS_KEY] as (() => void) | undefined)?.();
+  g[PROCESS_HOOKS_KEY] = dispose;
 }
-function removeResizeListener(listener: () => void): void {
+function disposeProcessHooks(dispose: () => void): void {
   const g = globalThis as Record<string, unknown>;
-  // Only the owner uninstalls: a newer instance may already have replaced this listener, and
-  // removing then would leave the live one unregistered.
-  if (g[RESIZE_LISTENER_KEY] !== listener) return;
-  process.stdout.off("resize", listener);
-  g[RESIZE_LISTENER_KEY] = undefined;
+  // Only the owner disposes: a newer load may already have taken over, and disposing then would
+  // tear down the LIVE hooks instead of these.
+  if (g[PROCESS_HOOKS_KEY] !== dispose) return;
+  dispose();
+  g[PROCESS_HOOKS_KEY] = undefined;
 }
 
 export default function subagents(pi: ExtensionAPI) {
@@ -417,7 +424,6 @@ export default function subagents(pi: ExtensionAPI) {
       /* ui from a stale ctx -> skip this tick, refreshes on the next handler */
     }
   };
-  installResizeListener(updateStatus);
 
   // Tell a parent that its child broke. The child owes its parent a message that a failed turn
   // will never send, so without this the parent waits forever (see error-notification.ts for the
@@ -450,7 +456,7 @@ export default function subagents(pi: ExtensionAPI) {
   // Update the status on every engine event; escalate budget-pauses to 'main' exactly once
   // (the pause event fires once — the paused guard in recordTurnStart prevents re-entry).
   // A manual /subagents-pause and a restored swarm do NOT escalate (nobody ran out of budget).
-  engine.subscribe((e) => {
+  const unsubscribeEngine = engine.subscribe((e) => {
     if (e.type === "error") notifyParentOfError(e);
     if (e.type === "pause" && e.reason === "budget") {
       try {
@@ -466,6 +472,18 @@ export default function subagents(pi: ExtensionAPI) {
     }
     updateStatus();
   });
+  // The roster widget hands pi fully composed lines truncated to the width they were built at,
+  // and pi re-draws those STORED lines after a resize — a line from a wider terminal then trips
+  // its "Rendered line exceeds terminal width" check. Rebuilding the widget here keeps the stored
+  // lines valid at the new width; pi only schedules its own re-render (process.nextTick), so this
+  // synchronous rebuild lands before the frame that would have thrown.
+  process.stdout.on("resize", updateStatus);
+  // Both hooks go in as ONE unit, so ownership cannot end up split between two loads.
+  const disposeHooks = () => {
+    process.stdout.off("resize", updateStatus);
+    unsubscribeEngine();
+  };
+  installProcessHooks(disposeHooks);
 
   // Policy lives in resolve-model.ts (pure); this only binds it to the live registry.
   const resolveModel = (ref: string | undefined): ResolvedModel | undefined =>
@@ -870,7 +888,7 @@ export default function subagents(pi: ExtensionAPI) {
     // A same-version /reload must retain the singleton's live children. Real foreground
     // replacement/quit closes their runtimes but deliberately leaves roster.json intact.
     if (event.reason === "reload") return;
-    removeResizeListener(updateStatus);
+    disposeProcessHooks(disposeHooks);
     const previousSubDir = subDir;
     subDir = undefined;
     await engine.shutdownAll();
