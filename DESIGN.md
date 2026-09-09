@@ -27,6 +27,8 @@ The panel's input box is the human speaking directly to the selected agent: it a
 
 Sending reports two orthogonal things back to the sender: the message's fate (delivered, buffered, failed) and the receiver's liveness. Since a just-woken agent has not started its turn at the instant routing returns, `send_message` and a spawn's initial message watch the engine's event log — from a mark taken before delivery, so nothing is missed — for that agent's first turn or error, bounded by a short window and never until the turn finishes. Delivery therefore stays fire-and-forget, while a receiver that took the message and never moved becomes visible as one that did not react; a window that was never watched, or an agent killed meanwhile, is reported as such instead of being guessed at.
 
+A child that fails owes its parent a message it can no longer send, so an agent entering the error state notifies its direct parent instead — once per failed turn, whether the turn threw or the model gave up after retries, and as ordinary peer traffic, so an idle parent is woken and a busy one picks it up at its next turn boundary. Nobody is told when the failing agent is the root of the spawn tree or when either side is already gone, which is what a subtree kill leaves behind.
+
 Messages use one structured custom pi message type. The structure preserves sender and recipient provenance for routing, model context, and TUI rendering. A live foreground sink on `globalThis` prevents a reloaded extension instance from delivering through a stale pi handle.
 
 ## Persistence and reload compatibility

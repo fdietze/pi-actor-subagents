@@ -747,17 +747,27 @@ export class Engine {
 		// A failed turn may never fire agent_end, so close the turn here to avoid the status
 		// sticking at thinking/writing/tool.
 		this.endTurn(name);
-		// Surface the failure as the idle "error" status (this is the thrown-exception path; the
-		// SDK's retry-exhausted path goes through setStopReason at agent_end). Order matters:
-		// endTurn does NOT clear stopReason, so set it after.
-		this.setStopReason(name, "error");
-		this.emit({ type: "error", name, reason, ts: Date.now() });
+		// Order matters: endTurn does NOT clear stopReason, so the error state is entered after it.
+		this.setStopReason(name, "error", reason);
 	}
 
-	/** Record the terminal reason of an agent's last turn (shown at idle via agentStatus). */
-	setStopReason(name: string, reason: StopReason | undefined): void {
+	/**
+	 * Record the terminal reason of an agent's last turn (shown at idle via agentStatus), and emit
+	 * the `error` event when this is the TRANSITION into the error state.
+	 *
+	 * One emit site for both ways an agent breaks — a thrown exception (reportError) and a turn the
+	 * SDK gave up retrying (agent_end) — so consumers see the failure exactly once per failed turn
+	 * regardless of which path produced it. `beginTurn` clears stopReason, so the next failure is a
+	 * fresh transition; a repeated error report within the same errored state stays silent instead
+	 * of waking the parent again for the same failure.
+	 */
+	setStopReason(name: string, reason: StopReason | undefined, detail?: string): void {
 		const rec = this.agents.get(name);
-		if (rec) rec.stopReason = reason;
+		if (!rec) return;
+		const entersError = reason === "error" && rec.stopReason !== "error";
+		rec.stopReason = reason;
+		if (entersError)
+			this.emit({ type: "error", name, reason: detail ?? "the turn failed after the SDK's retries", ts: Date.now() });
 	}
 
 	/** A turn started: enter its opening phase and drop the previous turn's outcome. */

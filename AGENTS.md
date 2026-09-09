@@ -25,6 +25,8 @@ A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, const
 
 Every tool result carries the wall-clock times it started and finished, so agents can measure elapsed time and a tool's own duration (which is what `set_status`'s `etaMinutes` needs). The start time is captured at `tool_call` and paired to the result by call id. A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the configured `childExtensions` policy. Both registrations apply the pure `tool-timestamp.ts`.
 
+An agent entering the error state — a thrown exception or a turn the SDK stopped retrying — emits one `error` event per failed turn, and `index.ts` delivers a notification to that agent's direct parent as ordinary peer traffic, so a parent parked on a reply that can no longer come is woken. `error-notification.ts` decides who is told.
+
 Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. The panel renders a child's transcript with pi's own chat components, so `AgentView` (in `engine.ts`, implemented by `spawner.ts`) also exposes the child session's `getToolDefinition`: a tool call is drawn by the tool's own renderer instead of as a bare name. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
 
 When the main session is file-backed, `persistence.ts` stores `roster.json` and child JSONL sessions under `<main-session-dir>/subagents/<main-session-id>/`. Restore validates the roster through `persistence-logic.ts` and reconnects each child session. These paths and formats are compatibility contracts.
@@ -50,6 +52,7 @@ There are no open ports or separate services. The extension has the same process
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration
 - `agent-message.ts`, `agent-message-renderer.ts`: structured peer messages and TUI rendering
+- `error-notification.ts`: pure rule for who is notified when an agent enters the error state
 - `tool-timestamp.ts`: pure tool-result stamper (wall-clock start + finish times)
 - `panel.ts`, `panel-logic.ts`, `feed.ts`: interactive and textual projections
 - focused `*.ts` helpers: pure domain rules; adjacent `*.test.ts` files are their tests

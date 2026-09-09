@@ -292,7 +292,8 @@ test("view.getToolDefinition reaches the session's tool registry (what makes the
 	});
 	await spawner.spawnAgent({ name: "echo", systemPrompt: "r" }, "main");
 	const view = engine.get("echo")?.view;
-	assert.equal((view?.getToolDefinition?.("known") as { name: string }).name, "known");
+	const definition = view?.getToolDefinition?.("known") as { name?: string } | undefined;
+	assert.equal(definition?.name, "known");
 	assert.equal(view?.getToolDefinition?.("nope"), undefined);
 });
 

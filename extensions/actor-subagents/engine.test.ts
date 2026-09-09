@@ -36,6 +36,26 @@ test("reportError ends the turn and surfaces the error status", () => {
 	assert.equal(e.events.at(-1)?.type, "error");
 });
 
+test("entering the error state emits one event per failed turn, on both failure paths", () => {
+	// The parent notification hangs off this event, so it must fire once for a thrown exception AND
+	// once for a turn the SDK stopped retrying (agent_end -> setStopReason), and not repeat while
+	// the agent simply stays errored.
+	const e = new Engine(caps);
+	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });
+	const errors = () => e.events.filter((ev) => ev.type === "error");
+
+	e.setStopReason("w", "error"); // retries-exhausted path: no exception was ever thrown
+	assert.equal(errors().length, 1);
+	e.setStopReason("w", "error"); // still the same failure -> no second wake-up
+	e.reportError("w", "boom"); // ditto via the exception path
+	assert.equal(errors().length, 1);
+
+	e.beginTurn("w"); // a new turn supersedes the outcome, so the next failure is a new transition
+	e.reportError("w", "boom");
+	assert.equal(errors().length, 2);
+	assert.equal(errors().at(-1)?.reason, "boom");
+});
+
 test("addAgent registers and has/get work, emits spawn event", () => {
 	const e = new Engine(caps);
 	e.addAgent(mainRecord());

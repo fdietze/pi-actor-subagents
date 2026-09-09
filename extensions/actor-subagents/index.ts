@@ -30,6 +30,7 @@ import { agentStatus } from "./agent-status.ts";
 import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
+import { errorNotification } from "./error-notification.ts";
 import {
   formatKillResult,
   formatResumeSummary,
@@ -418,10 +419,39 @@ export default function subagents(pi: ExtensionAPI) {
   };
   installResizeListener(updateStatus);
 
+  // Tell a parent that its child broke. The child owes its parent a message that a failed turn
+  // will never send, so without this the parent waits forever (see error-notification.ts for the
+  // decision, including who is deliberately not told).
+  // Delivery is ordinary peer traffic: an idle parent is woken, a busy one picks it up at its next
+  // turn boundary, a paused one keeps it in its inbox. The sender is "scheduler", the same engine
+  // voice the budget escalation uses, so the notification cannot be read as the child speaking.
+  const notifyParentOfError = (e: { name: string; reason: string }): void => {
+    const notification = errorNotification(
+      e,
+      engine.getSpawnTree(),
+      new Set(engine.list().map((a) => a.name)),
+    );
+    if (!notification) return;
+    if (notification.to === "main") {
+      try {
+        deliverToMain(createRoutedAgentMessage("scheduler", notification.content));
+      } catch {
+        /* no live foreground session — the error stays visible in the panel feed */
+      }
+      return;
+    }
+    // Fire-and-forget, and never as an unhandled rejection: this runs inside an engine event
+    // callback, where one would take the whole pi process down.
+    void engine.route("scheduler", notification.to, notification.content).catch(() => {
+      /* the failed delivery reports itself as that agent's own engine error */
+    });
+  };
+
   // Update the status on every engine event; escalate budget-pauses to 'main' exactly once
   // (the pause event fires once — the paused guard in recordTurnStart prevents re-entry).
   // A manual /subagents-pause and a restored swarm do NOT escalate (nobody ran out of budget).
   engine.subscribe((e) => {
+    if (e.type === "error") notifyParentOfError(e);
     if (e.type === "pause" && e.reason === "budget") {
       try {
         deliverToMain(
