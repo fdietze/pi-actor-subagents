@@ -313,8 +313,10 @@ export function moveSelection(current: number, delta: number, count: number): nu
  * see docs/tui.md and `parseSizeValue` in pi-tui's tui.js). A one-row floor matches pi's overlay
  * clamp for degenerate terminal sizes.
  *
- * Single source of truth — index.ts sizes the overlay with it and panel.ts sizes its transcript
- * with it, so the two cannot disagree and clip the chatbox (KISS, DRY).
+ * The overlay itself is sized by pi with the percentage string "50%" so it stays responsive to
+ * terminal resizes; this function is the panel's own copy of that height for its transcript
+ * viewport. Both compute the same rows from the same live terminal height, so a resize cannot
+ * make the container and the content disagree and clip the chatbox.
  */
 export function panelRows(terminalRows: number): number {
 	return Math.max(1, Math.floor(terminalRows / 2));

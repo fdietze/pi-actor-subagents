@@ -40,7 +40,6 @@ import {
   formatContext,
   formatRoster,
   formatSendTargets,
-  panelRows,
   type StatusTone,
   swarmStateLine,
 } from "./panel-logic.ts";
@@ -197,6 +196,29 @@ function mainState(): MainLiveState {
     g[MAIN_STATE_KEY] = s;
   }
   return s;
+}
+
+// The roster widget hands pi fully composed lines that were truncated to the width they were
+// built at, and pi re-draws those STORED lines after a resize — a line from a wider terminal then
+// trips its "Rendered line exceeds terminal width" check. So the widget is rebuilt on resize.
+// The listener reference lives on globalThis because a /reload runs this module again with fresh
+// closures: each load removes the previous instance's listener before installing its own, so the
+// listeners never stack and no dead closure keeps writing through a stale ui.
+const RESIZE_LISTENER_KEY = "__subagentsResizeListener_v1";
+function installResizeListener(listener: () => void): void {
+  const g = globalThis as Record<string, unknown>;
+  const previous = g[RESIZE_LISTENER_KEY] as (() => void) | undefined;
+  if (previous) process.stdout.off("resize", previous);
+  process.stdout.on("resize", listener);
+  g[RESIZE_LISTENER_KEY] = listener;
+}
+function removeResizeListener(listener: () => void): void {
+  const g = globalThis as Record<string, unknown>;
+  // Only the owner uninstalls: a newer instance may already have replaced this listener, and
+  // removing then would leave the live one unregistered.
+  if (g[RESIZE_LISTENER_KEY] !== listener) return;
+  process.stdout.off("resize", listener);
+  g[RESIZE_LISTENER_KEY] = undefined;
 }
 
 export default function subagents(pi: ExtensionAPI) {
@@ -394,6 +416,7 @@ export default function subagents(pi: ExtensionAPI) {
       /* ui from a stale ctx -> skip this tick, refreshes on the next handler */
     }
   };
+  installResizeListener(updateStatus);
 
   // Update the status on every engine event; escalate budget-pauses to 'main' exactly once
   // (the pause event fires once — the paused guard in recordTurnStart prevents re-entry).
@@ -816,6 +839,7 @@ export default function subagents(pi: ExtensionAPI) {
     // A same-version /reload must retain the singleton's live children. Real foreground
     // replacement/quit closes their runtimes but deliberately leaves roster.json intact.
     if (event.reason === "reload") return;
+    removeResizeListener(updateStatus);
     const previousSubDir = subDir;
     subDir = undefined;
     await engine.shutdownAll();
@@ -902,10 +926,14 @@ export default function subagents(pi: ExtensionAPI) {
             // Bottom half: the panel covers the chat tail while open, but the older chat above stays
             // visible. A top anchor kept the tail visible but was disorienting (the roster jumped
             // above the conversation), so we accept covering the tail for the unsurprising position.
+            // A percentage, not a number: pi re-resolves it against the live terminal height on
+            // every render, while a number computed at open time would freeze the container at the
+            // old height across a resize. "50%" is exactly what panelRows() gives the transcript
+            // inside, so container and content stay in sync.
             overlayOptions: {
               anchor: "bottom-center",
               width: "100%",
-              maxHeight: panelRows(process.stdout.rows ?? 30),
+              maxHeight: "50%",
             },
             // Without focus the overlay renders but the editor keeps the input — and the wheel.
             onHandle: (handle: { focus(): void }) => handle.focus(),
