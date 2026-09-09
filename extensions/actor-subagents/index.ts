@@ -579,6 +579,7 @@ export default function subagents(pi: ExtensionAPI) {
       setThinkingLevel: (level) => session.setThinkingLevel(level),
       subscribe: (listener) =>
         session.subscribe(listener as Parameters<typeof session.subscribe>[0]),
+      getToolDefinition: (name) => session.getToolDefinition(name),
       get messages() {
         return session.messages;
       },

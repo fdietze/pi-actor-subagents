@@ -47,6 +47,8 @@ export interface SessionLike {
 	/** Request an effort level; read `thinkingLevel` back for what the model actually allows. */
 	setThinkingLevel(level: ThinkingLevel): void;
 	subscribe(listener: (e: { type: string; message?: unknown; assistantMessageEvent?: unknown }) => void): () => void;
+	/** The session's definition of a tool (with its renderers), or undefined if it has none. */
+	getToolDefinition(name: string): unknown;
 	readonly messages: unknown[];
 	getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
 }
@@ -240,6 +242,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			getSystemPrompt: () => systemPrompt,
 			getContextUsage: () => session.getContextUsage(),
 			getStreamingMessage: () => streamingRef.msg,
+			getToolDefinition: (toolName) => session.getToolDefinition(toolName),
 			subscribe: (l) => session.subscribe(l),
 		};
 		const detach = subscribeBackground(name, session, streamingRef);

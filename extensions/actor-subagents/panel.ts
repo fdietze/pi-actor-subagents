@@ -160,15 +160,18 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			assistant: (message) =>
 				new AssistantMessageComponent(message as never, deps.hideThinking, undefined as never) as AssistantComponent,
 			tool: (call) => {
+				// The agent's own definition of the tool, so its renderCall draws the pending call with
+				// its argument preview exactly as the main chat does. A tool the session cannot name a
+				// definition for keeps the previous behaviour: an empty definition still takes the
+				// renderer path (call = just the tool name, result = the preview), whereas undefined
+				// would fall back to formatToolExecution() and dump the whole args JSON.
+				const definition = view.getToolDefinition?.(call.name) ?? {};
 				const component = new ToolExecutionComponent(
 					call.name,
 					call.id,
 					call.arguments,
 					{ showImages: false },
-					// An (empty) toolDefinition takes the renderer path: call = just the tool name
-					// (createCallFallback), result = the preview (createResultFallback). With undefined it
-					// falls back to formatToolExecution(), which also dumps the full args JSON — noise.
-					{} as never,
+					definition as never,
 					tui as never,
 					deps.cwd,
 				);

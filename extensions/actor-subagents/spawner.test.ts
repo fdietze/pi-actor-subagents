@@ -24,6 +24,10 @@ class FakeSession implements SessionLike {
 	getContextUsage() {
 		return { tokens: 0, contextWindow: 1000, percent: 0 };
 	}
+	/** Stands in for the session's tool registry: only 'known' has a definition. */
+	getToolDefinition(name: string) {
+		return name === "known" ? { name, renderCall: () => undefined } : undefined;
+	}
 	/** Mimics a live session that picks a delivered message up and starts a turn on it. */
 	autoReact = false;
 	private listeners: ((e: { type: string; message?: unknown }) => void)[] = [];
@@ -274,6 +278,22 @@ test("view.getStreamingMessage tracks the in-progress assistant message, cleared
 
 	sessions.get("echo")?.emit("agent_end");
 	assert.equal(view?.getStreamingMessage?.(), undefined); // finalized into session.messages
+});
+
+test("view.getToolDefinition reaches the session's tool registry (what makes the panel render calls)", async () => {
+	// The panel builds its ToolExecutionComponent from this definition; without it a pending call
+	// renders as the bare tool name instead of the tool's own call preview.
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	withMain(engine, []);
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session: new FakeSession() }),
+	});
+	await spawner.spawnAgent({ name: "echo", systemPrompt: "r" }, "main");
+	const view = engine.get("echo")?.view;
+	assert.equal((view?.getToolDefinition?.("known") as { name: string }).name, "known");
+	assert.equal(view?.getToolDefinition?.("nope"), undefined);
 });
 
 test("getStreamingMessage clears at message_end, not only agent_end (no double-render during tool exec)", async () => {

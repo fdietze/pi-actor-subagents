@@ -36,6 +36,13 @@ export interface AgentView {
 	 * switch — otherwise a slow-thinking agent shows no "Thinking..." until its next delta event.
 	 */
 	getStreamingMessage?(): unknown;
+	/**
+	 * The agent's definition of a tool by name, or undefined when the session does not know it.
+	 * The panel needs it to render a tool CALL the way the main chat does (the tool's own
+	 * renderCall instead of the bare name). Optional and opaque: an agent restored without a
+	 * live session simply has no definitions to offer, and the engine stays SDK-free.
+	 */
+	getToolDefinition?(name: string): unknown;
 	// Listener receives the full session event; `message` carries streaming deltas
 	// (used by the panel for live streaming). Loosely typed to stay SDK-free.
 	subscribe(listener: (e: { type: string; message?: unknown; assistantMessageEvent?: unknown }) => void): () => void;
