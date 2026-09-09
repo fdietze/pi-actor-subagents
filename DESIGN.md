@@ -43,7 +43,7 @@ For a file-backed main session, state lives at:
 
 `roster.json` records enough validated membership and session metadata to rebuild the swarm. Child conversations remain native pi JSONL sessions. Malformed roster data is ignored rather than partially trusted.
 
-The engine, foreground sink, foreground state, and restore guard use versioned `__subagents*` keys on `globalThis`. Those key names are runtime compatibility contracts: they keep same-version `/reload` connected to live children and deliberately change only when an incompatible in-memory shape requires a new singleton.
+The engine, foreground sink, foreground state, and restore guard use versioned `__subagents*` keys on `globalThis`. Those key names are runtime compatibility contracts: they keep same-version `/reload` connected to live children and deliberately change only when an incompatible in-memory shape requires a new singleton. A reload that finds an engine of an earlier generation shuts its children down before building the new one, because that generation's records are unreachable from the new code while its sessions would keep running; the roster on disk is what carries the swarm to the next start.
 
 ## Interfaces
 

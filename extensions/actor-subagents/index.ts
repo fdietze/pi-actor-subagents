@@ -161,7 +161,22 @@ function getEngine(): Engine {
   // Caps are read once, when this singleton is created: the swarm's limits stay fixed for as
   // long as its agents live, so editing settings.json applies at the next pi start (or /reload,
   // which only rebuilds the engine when ENGINE_KEY changed).
-  if (!g[ENGINE_KEY]) g[ENGINE_KEY] = new Engine(readSettings().caps);
+  if (!g[ENGINE_KEY]) {
+    // A key bump means a /reload met an engine of an earlier generation. This code cannot see its
+    // agents, but their child sessions keep running and can still deliver into the foreground
+    // through the global sink, so the previous generation is taken down before this one is built
+    // (Second-Order Thinking: an upgrade must not leave untracked runtimes behind). Membership
+    // stays on disk in roster.json, so the next pi start restores the swarm.
+    // Fire-and-forget: nothing here can await, and a faulty old runtime must not block the new
+    // engine — shutdownAll already isolates per-child failures.
+    for (const key of Object.keys(g)) {
+      if (key === ENGINE_KEY || !key.startsWith("__subagentsEngine_v")) continue;
+      const previous = g[key] as { shutdownAll?: () => Promise<void> };
+      delete g[key];
+      void previous?.shutdownAll?.().catch(() => {});
+    }
+    g[ENGINE_KEY] = new Engine(readSettings().caps);
+  }
   return g[ENGINE_KEY] as Engine;
 }
 
