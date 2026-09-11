@@ -45,7 +45,7 @@ async function withoutWaiting<T>(what: string, work: Promise<T>): Promise<T> {
 }
 
 test("send_message reports every target's message fate next to the receiver's state", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 50 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	engine.addAgent(record("main"));
 	engine.addAgent(record("worker"));
 	engine.addAgent(record("resting"));

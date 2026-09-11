@@ -4,7 +4,7 @@ import { Engine, type AgentHandle } from "./engine.ts";
 import { createAgentModelSetter } from "./set-agent-model.ts";
 
 const handle = (): AgentHandle => ({ deliver: async () => {}, abort: async () => {} });
-const caps = { maxAgents: 4, maxSpawnDepth: 3, turnBudget: 10 };
+const caps = { maxAgents: 4, maxSpawnDepth: 3 };
 
 /** Engine with one live child whose session accepts every change and clamps nothing. */
 function engineWithChild(): { engine: Engine; changes: unknown[] } {
