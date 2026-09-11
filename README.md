@@ -28,14 +28,13 @@ Optional, at `~/.pi/agent/actor-subagents/settings.json` (inside pi's agent dire
 {
   "maxAgents": 8,
   "maxSpawnDepth": 3,
-  "turnBudget": 200,
   "childExtensions": [
     "/absolute/path/to/an/extension"
   ]
 }
 ```
 
-`maxAgents`, `maxSpawnDepth`, and `turnBudget` are the swarm's limits: background agents alive at once, spawn-tree depth, and total agent turns before the swarm pauses and reports back to the main agent. The values above are the defaults. Each value must be a positive integer; anything else (including `0`) falls back to that key's default on its own, so a partial file is fine. New limits take effect when pi next starts.
+`maxAgents` and `maxSpawnDepth` are the swarm's limits: background agents alive at once and spawn-tree depth. The values above are the defaults. Each value must be a positive integer; anything else (including `0`) falls back to that key's default on its own, so a partial file is fine. New limits take effect when pi next starts.
 
 `childExtensions` grants child sessions extra pi extensions; loading is explicit and fail-closed. Only non-empty string entries are accepted, and anything else — a missing, unreadable, malformed, or invalid file — grants none. Changes apply to the next spawned agent. Do not list actor-subagents itself: children already receive its orchestration tools directly.
 
