@@ -112,11 +112,13 @@ export function formatModel(model: string | undefined, thinkingLevel: ThinkingLe
 
 // ── responsive roster table (formatRoster) ──
 //
-// One single-line row per agent, columns aligned across rows. Reading order:
-//   name · custom-status · system-status · eta · context · model · targets
-// Protected columns (name, system-status, eta) are never hidden. The rest collapse — whole
-// column dropped, all rows — when the terminal is too narrow, in this order:
-//   model → targets → context → custom-status
+// One single-line row per agent, columns aligned across rows. Reading order — identity first,
+// then what the agent IS, then what it runs on, then its progress signals:
+//   name · system-status · model · eta · context · custom-status · targets
+// Protected columns (name, system-status) are never hidden: they are what makes a row readable
+// at all. The rest collapse — whole column dropped, all rows — when the terminal is too narrow,
+// least informative first:
+//   targets → custom-status → context → eta → model
 // Alignment requires a roster-wide pass (column widths = max content across agents), so this
 // replaces any per-row formatting. Layout math is plain-text (ASCII content + single-width
 // glyphs); the status cell is styled only AFTER padding so ANSI never corrupts the widths.
@@ -146,7 +148,7 @@ function fitMiddle(s: string, w: number): string {
 
 interface ColSpec {
 	key: string;
-	// 0 = protected (never dropped); else the collapse order (1 dropped first … 4 dropped last).
+	// 0 = protected (never dropped); else the collapse order (1 dropped first … 5 dropped last).
 	collapseRank: number;
 	fit: "end" | "middle";
 	cap?: number;
@@ -171,19 +173,15 @@ export function formatRoster(
 	} = {},
 ): string[] {
 	const styleStatus = opts.styleStatus ?? ((l) => l);
-	// The ETA column exists only when at least one agent has set an ETA (otherwise wasted space).
-	const hasEta = entries.some((e) => e.etaTs != null);
 
 	const cols: ColSpec[] = [
 		{ key: "name", collapseRank: 0, fit: "middle", cap: NAME_CAP, cellOf: (e) => e.name },
-		{ key: "custom", collapseRank: 4, fit: "end", cap: CUSTOM_STATUS_MAX, cellOf: (e) => e.customStatus ?? "" },
 		{ key: "status", collapseRank: 0, fit: "end", cap: SYS_STATUS_CAP, cellOf: (e) => formatStatus(e.status) },
-		...(hasEta
-			? [{ key: "eta", collapseRank: 0, fit: "end", cellOf: (e: RosterEntry) => (e.etaTs != null ? formatEtaSuffix(e.etaTs) : "") } as ColSpec]
-			: []),
+		{ key: "model", collapseRank: 5, fit: "end", cellOf: (e) => formatModel(e.model, e.thinkingLevel) },
+		{ key: "eta", collapseRank: 4, fit: "end", cellOf: (e) => (e.etaTs != null ? formatEtaSuffix(e.etaTs) : "") },
 		{ key: "context", collapseRank: 3, fit: "end", cellOf: (e) => e.context },
-		{ key: "model", collapseRank: 1, fit: "end", cellOf: (e) => formatModel(e.model, e.thinkingLevel) },
-		{ key: "targets", collapseRank: 2, fit: "end", cellOf: (e) => e.targets ?? "" },
+		{ key: "custom", collapseRank: 2, fit: "end", cap: CUSTOM_STATUS_MAX, cellOf: (e) => e.customStatus ?? "" },
+		{ key: "targets", collapseRank: 1, fit: "end", cellOf: (e) => e.targets ?? "" },
 	];
 
 	// Natural width per column = widest content across agents, clamped to its cap.
@@ -194,7 +192,8 @@ export function formatRoster(
 		widthOf.set(c.key, c.cap != null ? Math.min(w, c.cap) : w);
 	}
 
-	// Drop any collapsible column that is empty for every agent (e.g. no one has send targets).
+	// Drop any collapsible column that is empty for every agent — e.g. nobody has send targets, or
+	// nobody set an ETA, which is the only reason the ETA column ever appears at all.
 	let visible = cols.filter((c) => c.collapseRank === 0 || (widthOf.get(c.key) ?? 0) > 0);
 
 	const GAP = 1; // single space between columns

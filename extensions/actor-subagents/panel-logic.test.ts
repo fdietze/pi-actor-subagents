@@ -117,9 +117,23 @@ test("formatRoster: name middle-ellipsis keeps the distinguishing tail (shared-p
 	assert.match(rows[1], /7\b/);
 });
 
-test("formatRoster: custom status leads, system status trails, both present", () => {
-	const row = formatRoster([re({ customStatus: "parsing files" })], 200)[0];
-	assert.match(row, /parsing files.*idle/);
+test("formatRoster: reading order is name, system status, model, ETA, context, custom status, targets", () => {
+	const eta = new Date();
+	eta.setHours(15, 20, 0, 0);
+	const row = formatRoster(
+		[
+			re({
+				name: "scout",
+				model: "anthropic/opus",
+				etaTs: eta.getTime(),
+				context: "15k/200k",
+				customStatus: "parsing files",
+				targets: "\u279cmain[3]",
+			}),
+		],
+		200,
+	)[0];
+	assert.match(row, /scout.*idle.*opus.*ETA ~15:20.*15k\/200k.*parsing files.*\u279cmain\[3\]/);
 });
 
 test("formatRoster: ETA renders in its own column; column absent when no agent has one", () => {
@@ -137,32 +151,37 @@ test("formatRoster: ETA column padded blank for agents without one when another 
 	assert.doesNotMatch(rows[1], /ETA/);
 });
 
-test("formatRoster: collapse order under narrowing width is model → targets → context → custom", () => {
+test("formatRoster: collapse order under narrowing width is targets → custom → context → ETA → model", () => {
+	const eta = new Date();
+	eta.setHours(15, 20, 0, 0);
 	const e = re({
 		name: "agent",
 		customStatus: "running tests",
 		status: { kind: "working", phase: "tool", tool: "bash" },
+		etaTs: eta.getTime(),
 		context: "15k/200k (7%)",
 		model: "anthropic/opus",
 		targets: "➜main[3]",
 	});
 	const at = (w: number) => formatRoster([e], w)[0];
-	// full row (computed width 59): everything present
-	assert.match(at(59), /opus/);
-	assert.match(at(59), /➜main\[3\]/);
-	// model dropped first
-	assert.doesNotMatch(at(55), /opus/);
-	assert.match(at(55), /➜main\[3\]/);
-	// then targets
-	assert.doesNotMatch(at(50), /➜main/);
-	assert.match(at(50), /15k\/200k/);
-	// then context
-	assert.doesNotMatch(at(40), /15k\/200k/);
-	assert.match(at(40), /running tests/);
-	// then custom — only protected (name + system status) survive
-	assert.doesNotMatch(at(25), /running tests/);
-	assert.match(at(25), /tool:bash/);
-	assert.match(at(25), /agent/);
+	// full row: everything present
+	assert.match(at(200), /➜main\[3\]/);
+	// targets dropped first
+	assert.doesNotMatch(at(60), /➜main/);
+	assert.match(at(60), /running tests/);
+	// then the custom status
+	assert.doesNotMatch(at(45), /running tests/);
+	assert.match(at(45), /15k\/200k/);
+	// then the context
+	assert.doesNotMatch(at(33), /15k\/200k/);
+	assert.match(at(33), /ETA ~15:20/);
+	// then the ETA
+	assert.doesNotMatch(at(22), /ETA/);
+	assert.match(at(22), /opus/);
+	// model last — only the protected columns (name + system status) survive
+	assert.doesNotMatch(at(16), /opus/);
+	assert.match(at(16), /tool:bash/);
+	assert.match(at(16), /agent/);
 });
 
 test("formatRoster: custom status capped at 32 with a trailing ellipsis", () => {
