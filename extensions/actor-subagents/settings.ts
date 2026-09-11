@@ -13,7 +13,6 @@
 export interface Caps {
 	maxAgents: number; // excluding 'main'
 	maxSpawnDepth: number;
-	turnBudget: number; // global across all background agents
 }
 
 export interface Settings {
@@ -26,10 +25,9 @@ export interface Settings {
 export const DEFAULT_CAPS: Caps = {
 	maxAgents: 8,
 	maxSpawnDepth: 3,
-	turnBudget: 200,
 };
 
-/** A limit is only usable as a count of agents/levels/turns, hence positive integers only. */
+/** A limit is only usable as a count of agents or levels, hence positive integers only. */
 function positiveInt(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -42,7 +40,7 @@ function childExtensions(value: unknown): string[] {
 
 /**
  * Parses the settings file's contents; unparseable text is treated as an empty file.
- * The file is flat (all four keys at the top level) because it is hand-edited; the `caps`
+ * The file is flat (all three keys at the top level) because it is hand-edited; the `caps`
  * grouping exists only in the type, where it is what the engine is constructed from.
  */
 export function parseSettings(json: string): Settings {
@@ -57,7 +55,6 @@ export function parseSettings(json: string): Settings {
 		caps: {
 			maxAgents: positiveInt(value?.maxAgents, DEFAULT_CAPS.maxAgents),
 			maxSpawnDepth: positiveInt(value?.maxSpawnDepth, DEFAULT_CAPS.maxSpawnDepth),
-			turnBudget: positiveInt(value?.turnBudget, DEFAULT_CAPS.turnBudget),
 		},
 		childExtensions: childExtensions(value?.childExtensions),
 	};

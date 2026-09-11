@@ -146,7 +146,7 @@ function createSessionCloser(session: SessionLike, detach: () => void = () => {}
 export function createSpawner(deps: SpawnerDeps): Spawner {
 	const { engine, resolveModel, createSession, onActivity, listAvailableModels } = deps;
 
-	// Subscribe to a background session's lifecycle to enforce the turn budget and
+	// Subscribe to a background session's lifecycle to refuse a paused agent's turns and
 	// track the turn phase.
 	// streamingRef.msg holds the current turn's in-progress assistant message so the panel can
 	// seed it on switch (view.getStreamingMessage). The partial lives only here mid-turn.
@@ -195,7 +195,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 	};
 
 	// Wire a live session into engine plumbing: the message handle, the panel view, and the
-	// lifecycle subscription (turn budget + streaming). Shared by fresh spawn and restore so
+	// lifecycle subscription (turn gating + streaming). Shared by fresh spawn and restore so
 	// both paths behave identically.
 	const wire = (
 		name: string,

@@ -117,11 +117,6 @@ const RESUME_NUDGE = (now: Date) => {
     `${pad(now.getHours())}:${pad(now.getMinutes())}`;
   return `[resumed ${stamp}] continue your interrupted work`;
 };
-// Injected into 'main' when the swarm pauses on the turn budget (not on a manual pause).
-const BUDGET_ESCALATION = (total: number) =>
-  `turn budget (${total}) exhausted, swarm paused. resume_subagents() to re-arm and continue. ` +
-  `If turns ran higher than expected, inspect with list_subagents before resuming.`;
-
 // The Engine is a globalThis singleton so it survives /reload. Consequence: a persisted
 // instance keeps the SHAPE (methods) of the code that built it — adding/changing Engine
 // methods requires bumping this key, else the old instance lacks them ("x is not a
@@ -154,7 +149,10 @@ const BUDGET_ESCALATION = (total: number) =>
 //      failed turn, both the thrown-exception and the retries-exhausted path); reportError no
 //      longer emits itself. A v22 instance would miss the retries-exhausted notification and
 //      double-report the exception one, so it must not survive into this code.
-const ENGINE_KEY = "__subagentsEngine_v23";
+// v24: the turn budget is gone — no global turn accounting, no budget pause, no `budget` getter;
+//      pauseSwarm(reason) becomes pauseRestored(). A v23 instance would still stop the swarm on
+//      its own budget and expose methods this code no longer calls.
+const ENGINE_KEY = "__subagentsEngine_v24";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -372,7 +370,7 @@ export default function subagents(pi: ExtensionAPI) {
     if (!ui) return;
     try {
       const agents = orderAgents(engine.list(), engine.getMessageMatrix());
-      // No footer status — count/running/budget live in the /subagents panel header.
+      // No footer status — count and running live in the /subagents panel header.
       // Permanent roster display above the editor (plan-mode pattern, no overlay).
       // Only show when at least one background agent exists (just 'main' alone is
       // redundant) and the /subagents panel is not already open.
@@ -419,13 +417,12 @@ export default function subagents(pi: ExtensionAPI) {
             truncateToWidth(stateLine.padEnd(width), width),
           )
         : theme.bg("selectedBg", truncateToWidth(stateLine, width));
-      // Same header the /subagents panel shows, so the turn budget is always visible at a
-      // glance (matters for the budget-pause escalation) — not only inside the panel.
-      const { used, total } = engine.budget;
+      // Same header the /subagents panel shows, so the swarm's size and activity stay visible at
+      // a glance — not only inside the panel.
       const header = theme.fg(
         "accent",
         truncateToWidth(
-          `─ subagents · ${background.length} agents · ${running} running · budget ${used}/${total} `,
+          `─ subagents · ${background.length} agents · ${running} running `,
           width,
         ),
       );
@@ -445,7 +442,7 @@ export default function subagents(pi: ExtensionAPI) {
   // decision, including who is deliberately not told).
   // Delivery is ordinary peer traffic: an idle parent is woken, a busy one picks it up at its next
   // turn boundary, a paused one keeps it in its inbox. The sender is "scheduler", the same engine
-  // voice the budget escalation uses, so the notification cannot be read as the child speaking.
+  // voice the scheduler uses, so the notification cannot be read as the child speaking.
   const notifyParentOfError = (e: { name: string; reason: string }): void => {
     const notification = errorNotification(
       e,
@@ -468,23 +465,9 @@ export default function subagents(pi: ExtensionAPI) {
     });
   };
 
-  // Update the status on every engine event; escalate budget-pauses to 'main' exactly once
-  // (the pause event fires once — the paused guard in recordTurnStart prevents re-entry).
-  // A manual /subagents-pause and a restored swarm do NOT escalate (nobody ran out of budget).
+  // Update the status on every engine event.
   const unsubscribeEngine = engine.subscribe((e) => {
     if (e.type === "error") notifyParentOfError(e);
-    if (e.type === "pause" && e.reason === "budget") {
-      try {
-        deliverToMain(
-          createRoutedAgentMessage(
-            "scheduler",
-            BUDGET_ESCALATION(engine.budget.total),
-          ),
-        );
-      } catch {
-        /* no live foreground session — escalation surfaces in the panel instead */
-      }
-    }
     updateStatus();
   });
   // The roster widget hands pi fully composed lines truncated to the width they were built at,
@@ -747,14 +730,13 @@ export default function subagents(pi: ExtensionAPI) {
       }
     }
     // Present the restored swarm as paused: one resume_subagents()/`/subagents-resume` reactivates it.
-    // "restored" is its own reason so it never escalates to main like a budget pause.
-    if (restored > 0) engine.pauseSwarm("restored");
+    if (restored > 0) engine.pauseRestored();
   };
 
-  // Shared by /subagents-resume and the resume_subagents tool: unpause the named agents (all of them
-  // when no names are given, which also re-arms the budget), release their buffered messages and
-  // re-trigger only the interrupted ones. Nothing is re-triggered when the resume did not happen
-  // (already live, or a named resume held back by the swarm-wide budget pause).
+  // Shared by /subagents-resume and the resume_subagents tool: unpause the named agents (all of
+  // them when no names are given), release their buffered messages and re-trigger only the
+  // interrupted ones. Nothing is re-triggered when the resume did not happen (already live, or a
+  // named resume held back by the swarm-wide restored pause).
   const resumeAgents = (names?: string[]): ResumeSummary => {
     const wanted = names && names.length > 0 ? new Set(names) : undefined;
     const interrupted = engine
@@ -926,10 +908,9 @@ export default function subagents(pi: ExtensionAPI) {
     label: "Resume Subagents",
     description:
       "Resume PAUSED agents: release their buffered messages and retrigger their interrupted work. " +
-      "Without names it resumes every agent, and re-arms the turn budget if the swarm stopped on " +
-      "it; with names it only lifts those agents' manual pause and cannot buy extra budget. Does " +
-      "nothing for agents that are already live. Call it after the swarm pauses on the turn budget " +
-      "to let the group continue.",
+      "Without names it resumes every agent, including a swarm that came up paused after a " +
+      "restore; with names it only lifts those agents' manual pause. Does nothing for agents that " +
+      "are already live.",
     parameters: Type.Object({
       names: Type.Optional(
         Type.Array(Type.String(), {
@@ -1034,7 +1015,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.registerCommand("subagents-resume", {
     description:
-      "Resume agents by name (empty = all; re-arms the turn budget if the swarm stopped on it): " +
+      "Resume agents by name (empty = all, including a swarm paused after restore): " +
       "release buffered messages and retrigger interrupted work. No effect on agents that are " +
       "already live.",
     handler: async (args, ctx) => {

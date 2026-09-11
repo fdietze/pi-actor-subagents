@@ -64,7 +64,7 @@ export interface RosterEntry {
 
 /**
  * Scheduler state line, shown below the roster (panel) and footer. `swarmPaused` is the
- * swarm-wide stop (turn budget / restored session) that holds every agent; `pausedCount` is how
+ * swarm-wide stop (a restored session) that holds every agent; `pausedCount` is how
  * many agents the human paused individually while the swarm itself runs. Keeping them apart
  * matters: claiming "messages buffer" for the whole swarm while other agents keep working and
  * receiving mail would be false. The per-agent phase (thinking/tool:.../paused) lives in the rows.

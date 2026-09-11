@@ -27,12 +27,12 @@ test("formatSnapshot lists each agent with status and turns", () => {
 		rec({ name: "main", depth: 0, model: "anthropic/opus" }),
 		rec({ name: "coder", activity: "thinking", turns: 4 }),
 	];
-	const out = formatSnapshot(agents, 4, 100, "main");
+	const out = formatSnapshot(agents, "main");
 	assert.match(out, /main/);
 	assert.match(out, /coder/);
 	assert.match(out, /thinking/); // mid-turn, opening phase
 	assert.match(out, /idle/);
-	assert.match(out, /4/);
+	assert.match(out, /turns:4/);
 });
 
 test("formatSnapshot keeps columns aligned when one status is long", () => {
@@ -40,22 +40,22 @@ test("formatSnapshot keeps columns aligned when one status is long", () => {
 		rec({ name: "a", turns: 1 }),
 		rec({ name: "b", activity: "thinking", customStatus: "running the whole test suite", etaTs: 0 }),
 	];
-	const lines = formatSnapshot(agents, 0, 100, "main").split("\n").slice(1);
+	const lines = formatSnapshot(agents, "main").split("\n").slice(1);
 	// The ETA must survive (it is the point of the column) and 'turns:' must start at one column.
 	assert.match(lines[1], /ETA ~/);
 	assert.equal(lines[0].indexOf("turns:"), lines[1].indexOf("turns:"));
 });
 
 test("formatSnapshot does not invent a turn count or a spawner for main", () => {
-	// main runs outside the background turn budget and has no spawner; "turns:0 (by main)" would lie.
-	const out = formatSnapshot([rec({ name: "main", depth: 0 })], 0, 100, "main");
+	// main's turns are pi's own, not the engine's, and it has no spawner; "turns:0 (by main)" would lie.
+	const out = formatSnapshot([rec({ name: "main", depth: 0 })], "main");
 	assert.match(out, /turns:-/);
 	assert.match(out, /\(foreground\)/);
 	assert.doesNotMatch(out, /\(by main\)/);
 });
 
 test("formatSnapshot exposes the paused scheduler and buffering behavior", () => {
-	const out = formatSnapshot([rec({ name: "scout" })], 0, 100, "main", true);
+	const out = formatSnapshot([rec({ name: "scout" })], "main", true);
 	assert.match(out, /PAUSED/);
 	assert.match(out, /messages are buffering/);
 	assert.match(out, /subagents-resume/);
@@ -64,8 +64,6 @@ test("formatSnapshot exposes the paused scheduler and buffering behavior", () =>
 test("formatSnapshot shows model and effective thinking level together", () => {
 	const out = formatSnapshot(
 		[rec({ name: "scout", model: "openai-codex/gpt-5.6-sol", thinkingLevel: "xhigh" })],
-		0,
-		100,
 		"main",
 	);
 	assert.match(out, /openai-codex\/gpt-5\.6-sol@xhigh/);
@@ -73,7 +71,7 @@ test("formatSnapshot shows model and effective thinking level together", () => {
 
 test("formatSnapshot appends the agent-set custom status after the system status", () => {
 	const agents = [rec({ name: "coder", customStatus: "parsing files" })];
-	const out = formatSnapshot(agents, 0, 100, "main");
+	const out = formatSnapshot(agents, "main");
 	assert.match(out, /idle · parsing files/);
 });
 
@@ -81,12 +79,12 @@ test("formatSnapshot renders the ETA as absolute clock time after the custom sta
 	const now = new Date();
 	now.setHours(15, 0, 0, 0);
 	const agents = [rec({ name: "coder", customStatus: "running tests", etaTs: now.getTime() + 20 * 60000 })];
-	const out = formatSnapshot(agents, 0, 100, "main", false, now.getTime());
+	const out = formatSnapshot(agents, "main", false, now.getTime());
 	assert.match(out, /idle · running tests · ETA ~15:20/);
 });
 
 test("formatSnapshot omits the ETA when etaTs is unset", () => {
-	const out = formatSnapshot([rec({ name: "coder", customStatus: "running tests" })], 0, 100, "main");
+	const out = formatSnapshot([rec({ name: "coder", customStatus: "running tests" })], "main");
 	assert.doesNotMatch(out, /ETA/);
 });
 
@@ -95,7 +93,7 @@ test("formatSnapshot renders fine-grained activity (writing / tool:name)", () =>
 		rec({ name: "w", activity: "writing" }),
 		rec({ name: "t", activity: "tool", currentTool: "bash" }),
 	];
-	const out = formatSnapshot(agents, 0, 100, "main");
+	const out = formatSnapshot(agents, "main");
 	assert.match(out, /writing/);
 	assert.match(out, /tool:bash/);
 });
@@ -108,7 +106,7 @@ test("formatSnapshot shows pending agents as spawning (not idle) with queue coun
 			buffer: [{ parts: [{ from: "main", content: "a" }] }, { parts: [{ from: "main", content: "b" }] }],
 		}),
 	];
-	const out = formatSnapshot(agents, 0, 100, "main");
+	const out = formatSnapshot(agents, "main");
 	assert.match(out, /spawning/);
 	assert.doesNotMatch(out, /idle/);
 	assert.match(out, /2 queued/);
@@ -122,7 +120,7 @@ test("formatSnapshot marks relation to the viewer", () => {
 		rec({ name: "sibling", spawnedBy: "main" }),
 		rec({ name: "worker", spawnedBy: "lead" }),
 	];
-	const out = formatSnapshot(agents, 0, 100, "lead");
+	const out = formatSnapshot(agents, "lead");
 	assert.match(out, /lead .*self/);
 	assert.match(out, /main .*parent/);
 	assert.match(out, /sibling .*peer/);
@@ -139,7 +137,7 @@ test("formatSnapshot shows context percent and relative age", () => {
 			subscribe: () => () => {},
 		},
 	});
-	const out = formatSnapshot([withCtx], 0, 100, "main", false, 10_000);
+	const out = formatSnapshot([withCtx], "main", false, 10_000);
 	assert.match(out, /ctx:42%/);
 	assert.match(out, /last 5s/);
 });
@@ -192,29 +190,27 @@ test("formatMulticastResult reports each receiver state a delivered message can 
 test("formatMulticastResult names the pause cause that parked a message", () => {
 	const buffered = (reason: PauseReason) => formatMulticastResult([{ target: "a", outcome: "buffered", reason }]);
 	assert.equal(buffered("manual"), "buffered for a (paused)");
-	assert.equal(buffered("budget"), "buffered for a (budget pause)");
 	assert.equal(buffered("restored"), "buffered for a (paused after restore)");
 });
 
-test("formatResumeSummary reports scheduler, released buffer, retriggers, and budget", () => {
+test("formatResumeSummary reports released buffer and retriggers, or why nothing happened", () => {
 	assert.equal(
-		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1, budgetRearmed: true }),
-		"agents resumed · released 2 buffered messages · retriggered 1 interrupted agent · budget re-armed",
+		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1 }),
+		"agents resumed · released 2 buffered messages · retriggered 1 interrupted agent",
 	);
-	// A live swarm is not resumed at all: claiming a re-armed budget here would be false.
+	// A live swarm is not resumed at all: reporting zeros would claim work that did not happen.
 	assert.equal(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, budgetRearmed: false }),
+		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0 }),
 		"agents already live · nothing to resume",
 	);
-	// A named resume clears manual pauses only, so claiming a re-armed budget would be false.
 	assert.equal(
-		formatResumeSummary({ wasPaused: true, bufferedMessages: 0, retriggered: 0, budgetRearmed: false }),
+		formatResumeSummary({ wasPaused: true, bufferedMessages: 0, retriggered: 0 }),
 		"agents resumed · released 0 buffered messages · retriggered 0 interrupted agents",
 	);
-	// A named resume cannot lift the swarm-wide budget stop; say what actually helps.
+	// A named resume cannot lift the swarm-wide restored pause; say what actually helps.
 	assert.match(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, budgetRearmed: false, blockedByBudget: true }),
-		/turn budget/,
+		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, blockedByRestoredPause: true }),
+		/paused after restore · \/subagents-resume without names/,
 	);
 });
 

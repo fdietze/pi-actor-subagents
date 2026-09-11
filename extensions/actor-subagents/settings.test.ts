@@ -13,11 +13,14 @@ test("caps are honored per field, so a partial file keeps the other defaults", (
 		...DEFAULT_CAPS,
 		maxAgents: 20,
 	});
-	assert.deepEqual(parseSettings(JSON.stringify({ maxSpawnDepth: 1, turnBudget: 5 })).caps, {
+	assert.deepEqual(parseSettings(JSON.stringify({ maxSpawnDepth: 1 })).caps, {
 		...DEFAULT_CAPS,
 		maxSpawnDepth: 1,
-		turnBudget: 5,
 	});
+});
+
+test("an unknown key is ignored rather than carried into the caps", () => {
+	assert.deepEqual(parseSettings(JSON.stringify({ turnBudget: 5, whatever: true })).caps, DEFAULT_CAPS);
 });
 
 test("a cap that is not a positive integer falls back to its default", () => {

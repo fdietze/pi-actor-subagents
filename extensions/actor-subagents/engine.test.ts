@@ -9,7 +9,7 @@ const fakeHandle = (): AgentHandle => ({
 	abort: async () => {},
 });
 
-const caps = { maxAgents: 2, maxSpawnDepth: 2, turnBudget: 5 };
+const caps = { maxAgents: 2, maxSpawnDepth: 2 };
 
 function mainRecord() {
 	return {
@@ -160,16 +160,12 @@ test("route buffers while paused", async () => {
 	assert.equal(e.events.at(-1)?.type, "route"); // Verify edge count and route event still fired
 });
 
-test("recordTurnStart counts turns and aborts when budget exhausted", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 2 });
+test("recordTurnStart counts the agent's turns without limiting them", () => {
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	assert.equal(e.recordTurnStart("a").abort, false);
-	assert.equal(e.recordTurnStart("a").abort, false);
-	const third = e.recordTurnStart("a");
-	assert.equal(third.abort, true);
-	assert.match(third.reason ?? "", /budget/i);
-	assert.equal(e.get("a")?.turns, 2);
-	assert.equal(e.budget.used, 2);
+	for (let i = 0; i < 5; i++) assert.equal(e.recordTurnStart("a").abort, false);
+	assert.equal(e.get("a")?.turns, 5);
+	assert.equal(e.isPaused(), false);
 });
 
 test("recordTurnStart aborts while paused", () => {
@@ -181,55 +177,24 @@ test("recordTurnStart aborts while paused", () => {
 	assert.match(r.reason ?? "", /paused/i);
 });
 
-test("resume clears the budget stop and resets the turn count", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 1 });
+test("resume lifts the restored pause and lets turns run again", () => {
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.recordTurnStart("a"); // reaches the budget -> swarm-wide stop
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: true });
+	e.pauseRestored();
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
 	assert.equal(e.isPaused(), false);
-	assert.equal(e.budget.used, 0);
 	assert.equal(e.events.at(-1)?.type, "resume");
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0, budgetRearmed: false });
+	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
 	assert.equal(e.recordTurnStart("a").abort, false);
 });
 
-test("a manual pause/resume cycle does NOT re-arm the budget", () => {
-	// Inversion: the valve must not be resettable by a verb that anyone (including main via
-	// resume_subagents) can call without the budget ever having tripped.
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
+test("resume on a live swarm is a no-op and emits nothing", () => {
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.recordTurnStart("a");
-	e.recordTurnStart("a");
-	e.pause(["a"]);
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
-	assert.equal(e.budget.used, 2);
-	assert.equal(e.get("a")?.paused, false);
-});
-
-test("resume on a live swarm is a no-op: the budget is NOT re-armed", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
-	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.recordTurnStart("a");
 	e.recordTurnStart("a");
 	const before = e.events.length;
-	// Re-arming here would let any caller poll the safety valve away.
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0, budgetRearmed: false });
-	assert.equal(e.budget.used, 2);
+	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
 	assert.equal(e.events.length, before, "no resume event for a swarm that was never paused");
-});
-
-test("freeze-by-blocking: budget-reaching turn completes, next is blocked, swarm freezes", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 2 });
-	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	assert.equal(e.recordTurnStart("a").abort, false); // used 1
-	assert.equal(e.isPaused(), false);
-	assert.equal(e.recordTurnStart("a").abort, false); // used 2 == budget: completes, then freezes
-	assert.equal(e.isPaused(), true);
-	assert.equal(e.events.at(-1)?.type, "pause");
-	assert.equal((e.events.at(-1) as { reason?: string }).reason, "budget");
-	const blocked = e.recordTurnStart("a"); // next turn blocked
-	assert.equal(blocked.abort, true);
-	assert.match(blocked.reason ?? "", /budget/i);
 });
 
 test("pause marks only mid-turn agents as pausedMidTurn; manual pause reason", () => {
@@ -306,7 +271,7 @@ test("addAgent preserves optional view", () => {
 });
 
 test("reserve blocks duplicate, counts toward cap; release frees a slot", () => {
-	const e = new Engine({ maxAgents: 2, maxSpawnDepth: 3, turnBudget: 5 });
+	const e = new Engine({ maxAgents: 2, maxSpawnDepth: 3 });
 	assert.equal(e.reserve("a", "main").ok, true);
 	assert.equal(e.reserve("a", "main").ok, false); // duplicate (R2)
 	assert.equal(e.reserve("b", "main").ok, true);
@@ -319,7 +284,7 @@ test("reserve blocks duplicate, counts toward cap; release frees a slot", () => 
 });
 
 test("route to a pending agent buffers; attach flushes to the real handle (R1)", async () => {
-	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	e.reserve("a", "main");
 	const r = await e.route("main", "a", "ping");
 	assert.deepEqual(r, { outcome: "delivered" }); // no longer unknown
@@ -360,7 +325,7 @@ test("kill awaits the agent's ordered runtime close, removes it, and emits a kil
 });
 
 test("kill cascades to the whole subtree, deepest first", async () => {
-	const e = new Engine({ maxAgents: 9, maxSpawnDepth: 9, turnBudget: 9 });
+	const e = new Engine({ maxAgents: 9, maxSpawnDepth: 9 });
 	const closed: string[] = [];
 	const withClose = (name: string, parent: string, depth: number) => ({
 		...mainRecord(),
@@ -405,7 +370,7 @@ test("kill refuses 'main' and unknown agents", async () => {
 });
 
 test("killAll removes every agent except 'main' and returns their names", async () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 2, turnBudget: 5 });
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 2 });
 	e.addAgent(mainRecord());
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
@@ -416,7 +381,7 @@ test("killAll removes every agent except 'main' and returns their names", async 
 });
 
 test("shutdownAll closes background runtimes without recording explicit kills", async () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 2, turnBudget: 5 });
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 2 });
 	e.addAgent(mainRecord());
 	const closed: string[] = [];
 	for (const name of ["a", "b"]) {
@@ -438,7 +403,7 @@ test("shutdownAll closes background runtimes without recording explicit kills", 
 });
 
 test("getMessageMatrix counts edges; multicast counts one per target", async () => {
-	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 50 });
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	e.addAgent(mainRecord());
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
@@ -456,7 +421,7 @@ test("getMessageMatrix counts edges; multicast counts one per target", async () 
 });
 
 test("reserve records the spawn parent (child -> parent)", () => {
-	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	e.addAgent(mainRecord());
 	e.reserve("a", "main");
 	e.attach("a", { model: "test/m", handle: fakeHandle() });
@@ -468,7 +433,7 @@ test("reserve records the spawn parent (child -> parent)", () => {
 });
 
 test("re-spawning a killed name clears its incoming + outgoing edges and overwrites its parent", async () => {
-	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 50 });
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	e.addAgent(mainRecord());
 	e.reserve("a", "main");
 	e.attach("a", { model: "test/m", handle: fakeHandle() });
@@ -511,7 +476,7 @@ test("resume releases a paused inbox as one ordered batch", async () => {
 
 	assert.deepEqual(delivered, []); // Buffered
 
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 2, budgetRearmed: false });
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 2 });
 
 	assert.deepEqual(delivered, [
 		{ parts: [{ from: "main", content: "ping 1" }, { from: "main", content: "ping 2" }] },
@@ -519,8 +484,8 @@ test("resume releases a paused inbox as one ordered batch", async () => {
 	assert.equal(e.get("coder")?.pausedInbox, undefined);
 });
 
-test("deadlock: budget-reaching turn's route buffers, idle recipient receives on resume", async () => {
-	const e = new Engine({ ...caps, turnBudget: 1 });
+test("a route issued while the swarm is paused buffers and lands on resume", async () => {
+	const e = new Engine({ ...caps });
 	const delivered: RoutedAgentMessage[] = [];
 	
 	e.addAgent({
@@ -545,15 +510,14 @@ test("deadlock: budget-reaching turn's route buffers, idle recipient receives on
 		lastActivity: Date.now(),
 	});
 
-	// explore starts its turn - reaches budget limit (1/1)
-	const startResult = e.recordTurnStart("explore");
-	assert.equal(startResult.abort, false); // allowed to complete
-	assert.equal(e.isPaused(), true); // swarm is now paused
+	assert.equal(e.recordTurnStart("explore").abort, false);
+	e.pauseRestored();
+	assert.equal(e.isPaused(), true);
 
-	// explore sends message to exploit during its budget-reaching turn
+	// explore sends to exploit while the swarm-wide stop holds
 	const routeResult = await e.route("explore", "exploit", "do the work");
-	// The swarm-wide cause is named, not the generic "paused": only a full resume re-arms it.
-	assert.deepEqual(routeResult, { outcome: "buffered", reason: "budget" });
+	// The swarm-wide cause is named, not the generic "paused": only a full resume lifts it.
+	assert.deepEqual(routeResult, { outcome: "buffered", reason: "restored" });
 	assert.deepEqual(delivered, []); // exploit didn't receive it yet
 
 	// User resumes the swarm
@@ -652,8 +616,8 @@ test("pause() without names pauses every background agent but never 'main'", () 
 	assert.deepEqual(e.pause(["a"]), [], "an already paused agent is not reported as newly paused");
 });
 
-test("resume(names) releases only those agents and does NOT re-arm the budget", async () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
+test("resume(names) releases only those agents", async () => {
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	const delivered: RoutedAgentMessage[] = [];
 	e.addAgent({
 		...mainRecord(),
@@ -667,11 +631,11 @@ test("resume(names) releases only those agents and does NOT re-arm the budget", 
 		},
 	});
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1, activity: "thinking" });
-	e.recordTurnStart("a"); // burns budget
+	e.recordTurnStart("a");
 	e.pause();
 
-	assert.deepEqual(e.resume(["a"]), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
-	assert.equal(e.budget.used, 1, "a named resume must not reset the safety valve");
+	assert.deepEqual(e.resume(["a"]), { wasPaused: true, bufferedMessages: 0 });
+	assert.equal(e.get("a")?.turns, 1, "per-agent turn telemetry survives a resume");
 	assert.equal(e.get("a")?.paused, false);
 	assert.equal(e.get("b")?.paused, true, "unnamed agents stay paused");
 	assert.equal(e.get("b")?.pausedMidTurn, true);
@@ -683,41 +647,40 @@ test("resume(names) releases only those agents and does NOT re-arm the budget", 
 	assert.deepEqual(delivered, [createRoutedAgentMessage("main", "back to work")]);
 	assert.deepEqual(
 		e.resume(["ghost"]),
-		{ wasPaused: false, bufferedMessages: 0, budgetRearmed: false },
+		{ wasPaused: false, bufferedMessages: 0 },
 		"unknown names resume nothing",
 	);
 });
 
-test("resume(names) is refused while the swarm is budget-paused", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 1 });
+test("resume(names) is refused while the swarm is paused after a restore", () => {
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.recordTurnStart("a"); // reaches the budget -> swarm-wide pause
+	e.pauseRestored();
 	assert.deepEqual(e.resume(["a"]), {
 		wasPaused: false,
 		bufferedMessages: 0,
-		budgetRearmed: false,
-		blockedByBudget: true,
+		blockedByRestoredPause: true,
 	});
-	assert.equal(e.recordTurnStart("a").abort, true, "the budget pause still holds");
-	// Only the full resume re-arms it.
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: true });
+	assert.equal(e.recordTurnStart("a").abort, true, "the restored pause still holds");
+	// Only the full resume lifts it.
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
 	assert.equal(e.recordTurnStart("a").abort, false);
 });
 
 test("resume() without names clears every manual pause", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5, turnBudget: 10 });
+	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
 	e.pause();
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0, budgetRearmed: false });
+	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
 	assert.deepEqual(e.pausedAgents(), []);
 	assert.equal(e.isPaused(), false);
 });
 
-test("pauseSwarm('restored') blocks every agent until a full resume", () => {
+test("pauseRestored() blocks every agent until a full resume", () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1, activity: "tool" });
-	e.pauseSwarm("restored");
+	e.pauseRestored();
 	assert.equal(e.isPaused(), true);
 	assert.equal(e.get("a")?.pausedMidTurn, true);
 	assert.equal(e.recordTurnStart("a").abort, true);
@@ -922,8 +885,8 @@ test("statusOf folds the swarm-wide pause into the per-record status", () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	assert.deepEqual(e.statusOf("a"), { kind: "idle" });
-	e.pauseSwarm("budget");
-	// agentStatus() alone cannot see budgetPaused: that state lives on the engine, by design.
+	e.pauseRestored();
+	// agentStatus() alone cannot see the swarm-wide pause: that state lives on the engine, by design.
 	assert.deepEqual(agentStatus(e.get("a")!), { kind: "idle" });
 	assert.deepEqual(e.statusOf("a"), { kind: "paused" });
 	assert.equal(e.statusOf("ghost"), undefined);

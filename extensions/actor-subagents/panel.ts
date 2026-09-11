@@ -378,8 +378,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 		render(width: number): string[] {
 			const lines: string[] = [];
 			const running = deps.engine.list().filter((a) => agentStatus(a).kind === "working").length;
-			const { used, total } = deps.engine.budget;
-			const header = `─ subagents · ${agents().length}/${deps.engine.maxAgents} agents · ${running} running · budget ${used}/${total} `;
+			const header = `─ subagents · ${agents().length}/${deps.engine.maxAgents} agents · ${running} running `;
 			lines.push(theme.fg("accent", truncateToWidth(header.padEnd(width, "─"), width)));
 			const styler = styleStatus(theme);
 			const matrix = deps.engine.getMessageMatrix();

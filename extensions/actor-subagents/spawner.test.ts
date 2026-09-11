@@ -80,8 +80,8 @@ function withMain(engine: Engine, inbox: RoutedAgentMessage[]) {
 		});
 }
 
-test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 2 });
+test("smoke: spawn -> deliver -> reply -> pause buffers", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	const userInbox: RoutedAgentMessage[] = [];
 	withMain(engine, userInbox);
 
@@ -119,23 +119,23 @@ test("smoke: spawn -> deliver -> reply -> budget abort -> pause", async () => {
 	sessions.get("echo")?.emit("agent_end");
 	assert.equal(engine.get("echo")?.activity, undefined);
 
-	// turn budget: 3rd turn_start exceeds budget(2) and aborts the session
+	// turns are counted, never capped
 	const echo = sessions.get("echo");
 	echo?.emit("turn_start");
 	echo?.emit("turn_start");
+	assert.equal(engine.get("echo")?.turns, 2);
+	assert.equal(echo?.aborted ?? 0, 0);
+
+	// a paused agent's turn is refused at its start, and its incoming mail buffers
+	engine.pause();
 	echo?.emit("turn_start");
 	assert.ok((echo?.aborted ?? 0) >= 1);
-
-	// pausing buffers routing
-	engine.pause();
 	const blocked = await engine.route("main", "echo", "again");
-	// The budget stop already holds here, and that swarm-wide cause outranks the manual pause:
-	// only a full resume can release this message.
-	assert.deepEqual(blocked, { outcome: "buffered", reason: "budget" });
+	assert.deepEqual(blocked, { outcome: "buffered", reason: "manual" });
 });
 
 test("spawn confirms the new agent reacted and reports its observed status", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const spawner = createSpawner({
 		engine,
@@ -154,7 +154,7 @@ test("spawn confirms the new agent reacted and reports its observed status", asy
 });
 
 test("spawn reports an initial message as buffered while the swarm-wide pause holds", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	const spawner = createSpawner({
@@ -162,9 +162,9 @@ test("spawn reports an initial message as buffered while the swarm-wide pause ho
 		resolveModel: () => ({ provider: "test", id: "m", model: {} }),
 		createSession: async () => ({ session }),
 	});
-	// A restored (or budget-stopped) swarm blocks every agent, including ones spawned afterwards.
-	// A manual pause names existing agents instead, so it deliberately does not cover new ones.
-	engine.pauseSwarm("restored");
+	// A restored swarm blocks every agent, including ones spawned afterwards. A manual pause names
+	// existing agents instead, so it deliberately does not cover new ones.
+	engine.pauseRestored();
 
 	const started = Date.now();
 	const result = await spawner.spawnAgent(
@@ -182,7 +182,7 @@ test("spawn reports an initial message as buffered while the swarm-wide pause ho
 });
 
 test("spawn passes an explicit thinking override and records Pi's effective level", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	let requested: ThinkingLevel | undefined;
 	const spawner = createSpawner({
@@ -207,7 +207,7 @@ test("spawn passes an explicit thinking override and records Pi's effective leve
 });
 
 test("nested children inherit their parent's effective thinking level", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const requested: Array<ThinkingLevel | undefined> = [];
 	const spawner = createSpawner({
@@ -229,7 +229,7 @@ test("nested children inherit their parent's effective thinking level", async ()
 });
 
 test("restored agents expose the reopened session's effective thinking level", () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	session.thinkingLevel = "low";
@@ -256,7 +256,7 @@ test("restored agents expose the reopened session's effective thinking level", (
 test("view.getStreamingMessage tracks the in-progress assistant message, cleared on agent_end", async () => {
 	// Regression: the panel seeds "Thinking..." on switch from this; without it a slow-thinking
 	// agent shows no label until its next delta event arrives (seconds later).
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const sessions = new Map<string, FakeSession>();
 	const spawner = createSpawner({
@@ -283,7 +283,7 @@ test("view.getStreamingMessage tracks the in-progress assistant message, cleared
 test("view.getToolDefinition reaches the session's tool registry (what makes the panel render calls)", async () => {
 	// The panel builds its ToolExecutionComponent from this definition; without it a pending call
 	// renders as the bare tool name instead of the tool's own call preview.
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const spawner = createSpawner({
 		engine,
@@ -303,7 +303,7 @@ test("getStreamingMessage clears at message_end, not only agent_end (no double-r
 	// two are never reference-equal and the panel cannot dedup by identity. If the streaming ref
 	// were held past message_end, the same message would be BOTH committed and "streaming" for the
 	// whole tool window and render twice. Clearing at message_end closes that window.
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const sessions = new Map<string, FakeSession>();
 	const spawner = createSpawner({
@@ -332,7 +332,7 @@ test("getStreamingMessage clears at message_end, not only agent_end (no double-r
 });
 
 test("deliver is fire-and-forget: does not await the target's turn", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	// Agent-message delivery never resolves (simulates a long-running turn). spawnAgent with an
 	// initial message must still resolve — otherwise the spawn_subagent tool would hang.
@@ -358,7 +358,7 @@ test("deliver is fire-and-forget: does not await the target's turn", async () =>
 });
 
 test("deliver failure surfaces as an engine error event", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	class FailingSession extends FakeSession {
 		async sendAgentMessage(): Promise<void> {
@@ -381,7 +381,7 @@ test("deliver failure surfaces as an engine error event", async () => {
 });
 
 test("spawn rejects unknown model", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	const spawner = createSpawner({
 		engine,
 		resolveModel: (ref) => (ref ? { provider: "t", id: "m", model: {} } : undefined),
@@ -394,7 +394,7 @@ test("spawn rejects unknown model", async () => {
 });
 
 test("spawn rejects duplicate name", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	const userInbox: RoutedAgentMessage[] = [];
 	withMain(engine, userInbox);
 	const spawner = createSpawner({
@@ -409,7 +409,7 @@ test("spawn rejects duplicate name", async () => {
 });
 
 test("spawn enforces max depth via spawner depth", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 2, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 2 });
 	const userInbox: RoutedAgentMessage[] = [];
 	withMain(engine, userInbox);
 	const spawner = createSpawner({
@@ -426,7 +426,7 @@ test("spawn enforces max depth via spawner depth", async () => {
 });
 
 test("kill closes a child session exactly once in abortBash-abort-detach-shutdown-dispose order", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	const spawner = createSpawner({
@@ -446,7 +446,7 @@ test("kill closes a child session exactly once in abortBash-abort-detach-shutdow
 });
 
 test("a child killed while session creation is pending closes the orphan runtime", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	let finishCreation!: (value: { session: FakeSession }) => void;
@@ -471,7 +471,7 @@ test("a child killed while session creation is pending closes the orphan runtime
 });
 
 test("a spawned agent can be retuned in place, and the roster adopts the session's level", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 10 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const sessions = new Map<string, FakeSession>();
 	const spawner = createSpawner({
@@ -495,7 +495,7 @@ test("a spawned agent can be retuned in place, and the roster adopts the session
 });
 
 test("aborting an agent interrupts its running bash before stopping the agent loop", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	const spawner = createSpawner({
@@ -510,7 +510,7 @@ test("aborting an agent interrupts its running bash before stopping the agent lo
 });
 
 test("panel input reaches the child as a real user message", async () => {
-	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3, turnBudget: 5 });
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
 	const spawner = createSpawner({

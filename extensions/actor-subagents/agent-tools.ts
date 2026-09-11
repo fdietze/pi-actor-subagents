@@ -284,19 +284,12 @@ export function makeAgentTools(
       description: "List all agents and their status.",
       parameters: Type.Object({}),
       execute: async () => {
-        const { used, total } = engine.budget;
         const ordered = orderAgents(engine.list(), engine.getMessageMatrix());
         return {
           content: [
             {
               type: "text",
-              text: formatSnapshot(
-                ordered,
-                used,
-                total,
-                selfName,
-                engine.isPaused(),
-              ),
+              text: formatSnapshot(ordered, selfName, engine.isPaused()),
             },
           ],
           details: {},

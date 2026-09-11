@@ -33,8 +33,6 @@ function relTo(a: AgentRecord, viewer: string, viewerParent: string | undefined)
  */
 export function formatSnapshot(
 	agents: AgentRecord[],
-	turnsUsed: number,
-	turnBudget: number,
 	viewer: string,
 	paused: boolean = false,
 	now: number = Date.now(),
@@ -70,8 +68,8 @@ export function formatSnapshot(
 		const rel = relTo(a, viewer, viewerParent);
 		const queued = a.pending && a.buffer && a.buffer.length > 0 ? `, ${a.buffer.length} queued` : "";
 		const model = formatModelThinking(a.model, a.thinkingLevel);
-		// Only the foreground agent runs turns outside the budget accounting, and it has no
-		// spawner — printing "turns:0 (by main)" for it would state two things that are not true.
+		// The foreground agent's turns are pi's own, not this engine's, and it has no spawner —
+		// printing "turns:0 (by main)" for it would state two things that are not true.
 		const isMain = a.name === "main";
 		const turns = isMain ? "-" : String(a.turns);
 		const origin = isMain ? "(foreground)" : `(by ${a.spawnedBy}${queued})`;
@@ -82,8 +80,8 @@ export function formatSnapshot(
 		);
 	});
 	const scheduler = paused
-		? `agents (budget ${turnsUsed}/${turnBudget}; PAUSED — messages are buffering; /subagents-resume to continue):`
-		: `agents (budget ${turnsUsed}/${turnBudget}):`;
+		? "agents (PAUSED — messages are buffering; /subagents-resume to continue):"
+		: "agents:";
 	return [scheduler, ...rows].join("\n");
 }
 
@@ -135,7 +133,6 @@ export function formatReceiverStatus(reaction: Reaction): string {
 /** Why a message is parked, in the sender's terms: what would have to happen to release it. */
 const BUFFERED_CAUSE: Record<PauseReason, string> = {
 	manual: "paused",
-	budget: "budget pause",
 	restored: "paused after restore",
 };
 
@@ -164,31 +161,26 @@ export interface ResumeSummary {
 	wasPaused: boolean;
 	bufferedMessages: number;
 	retriggered: number;
-	/** Whether the turn budget was actually re-armed (only lifting the budget stop does that). */
-	budgetRearmed: boolean;
-	/** A named resume hit the swarm-wide budget pause, which only a full resume can re-arm. */
-	blockedByBudget?: boolean;
+	/** A named resume hit the swarm-wide restored pause, which only a full resume can lift. */
+	blockedByRestoredPause?: boolean;
 }
 
 /**
  * Human-readable projection of the structured resume result.
  *
- * Resuming a swarm that was never paused does nothing at all — no inbox is released, no
- * agent is re-triggered and the budget keeps counting. Reporting those zeros next to
- * "budget re-armed" claimed work that did not happen, so that case gets its own short line.
+ * Resuming a swarm that was never paused does nothing at all — no inbox is released and no
+ * agent is re-triggered. Reporting those zeros claimed work that did not happen, so that case
+ * gets its own short line.
  */
 export function formatResumeSummary(summary: ResumeSummary): string {
-	if (summary.blockedByBudget)
-		return "swarm is paused on the turn budget · /subagents-resume without names to re-arm and continue";
+	if (summary.blockedByRestoredPause)
+		return "swarm is paused after restore · /subagents-resume without names to continue";
 	if (!summary.wasPaused) return "agents already live · nothing to resume";
 	const noun = summary.retriggered === 1 ? "agent" : "agents";
 	return [
 		"agents resumed",
 		`released ${summary.bufferedMessages} buffered messages`,
 		`retriggered ${summary.retriggered} interrupted ${noun}`,
-		// Only a resume that lifted the budget stop reset the turn count; saying so otherwise
-		// would credit work this call did not do.
-		...(summary.budgetRearmed ? ["budget re-armed"] : []),
 	].join(" · ");
 }
 
