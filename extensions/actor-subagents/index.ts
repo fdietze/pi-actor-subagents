@@ -152,7 +152,10 @@ const RESUME_NUDGE = (now: Date) => {
 // v24: the turn budget is gone — no global turn accounting, no budget pause, no `budget` getter;
 //      pauseSwarm(reason) becomes pauseRestored(). A v23 instance would still stop the swarm on
 //      its own budget and expose methods this code no longer calls.
-const ENGINE_KEY = "__subagentsEngine_v24";
+// v25: child lifecycle wiring finalizes a logical run on agent_settled, not each retry's agent_end.
+//      Existing sessions retain their subscribed closure across /reload, so a v24 engine must be
+//      shut down rather than keep emitting duplicate retry notifications.
+const ENGINE_KEY = "__subagentsEngine_v25";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;

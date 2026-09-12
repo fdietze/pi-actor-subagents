@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRoutedAgentMessage, type RoutedAgentMessage } from "./agent-message.ts";
 import { Engine } from "./engine.ts";
+import { errorNotification } from "./error-notification.ts";
 import { createSpawner, type SessionLike, type ThinkingLevel } from "./spawner.ts";
 
 class FakeSession implements SessionLike {
@@ -280,9 +281,11 @@ test("view.getStreamingMessage tracks the in-progress assistant message, cleared
 	assert.equal(view?.getStreamingMessage?.(), undefined); // finalized into session.messages
 });
 
-test("retries produce one terminal error per settled logical run", async () => {
+test("retries produce one parent notification per settled logical run", async () => {
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
-	withMain(engine, []);
+	const parentInbox: RoutedAgentMessage[] = [];
+	const parentMessage = (index: number): RoutedAgentMessage | undefined => parentInbox[index];
+	withMain(engine, parentInbox);
 	const session = new FakeSession();
 	const spawner = createSpawner({
 		engine,
@@ -291,19 +294,28 @@ test("retries produce one terminal error per settled logical run", async () => {
 	});
 	await spawner.spawnAgent({ name: "worker", systemPrompt: "work" }, "main");
 	const errors = () => engine.events.filter((event) => event.type === "error");
+	engine.subscribe((event) => {
+		if (event.type !== "error") return;
+		const notification = errorNotification(event, engine.getSpawnTree(), engine.liveNames());
+		if (notification) void engine.route("scheduler", notification.to, notification.content);
+	});
 
 	// One logical run can contain several provider attempts. None is terminal until the session
-	// settles, and the final assistant error is what the parent needs to diagnose the failure.
-	for (let attempt = 0; attempt < 4; attempt++) {
-		session.messages.push({ role: "assistant", stopReason: "error", errorMessage: "rate limit exceeded" });
+	// settles, and distinct details prove that the final assistant error reaches the parent.
+	for (let attempt = 1; attempt <= 4; attempt++) {
+		session.messages.push({ role: "assistant", stopReason: "error", errorMessage: `rate limit attempt ${attempt}` });
 		session.emit("agent_end");
 	}
 	assert.equal(errors().length, 0);
+	assert.deepEqual(parentInbox, []);
 	assert.equal(engine.get("worker")?.stopReason, undefined);
 
 	session.emit("agent_settled");
 	assert.equal(errors().length, 1);
-	assert.equal(errors()[0]?.reason, "rate limit exceeded");
+	assert.equal(errors()[0]?.reason, "rate limit attempt 4");
+	assert.equal(parentInbox.length, 1);
+	assert.equal(parentMessage(0)?.parts[0]?.from, "scheduler");
+	assert.match(parentMessage(0)?.parts[0]?.content ?? "", /rate limit attempt 4/);
 	assert.equal(engine.get("worker")?.stopReason, "error");
 
 	// A separately prompted logical run clears the prior outcome and may notify once again.
@@ -313,6 +325,8 @@ test("retries produce one terminal error per settled logical run", async () => {
 	session.emit("agent_settled");
 	assert.equal(errors().length, 2);
 	assert.equal(errors()[1]?.reason, "provider unavailable");
+	assert.equal(parentInbox.length, 2);
+	assert.match(parentMessage(1)?.parts[0]?.content ?? "", /provider unavailable/);
 });
 
 test("view.getToolDefinition reaches the session's tool registry (what makes the panel render calls)", async () => {
