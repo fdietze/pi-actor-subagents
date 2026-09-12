@@ -681,6 +681,15 @@ export class Engine {
 		targets.set(to, (targets.get(to) ?? 0) + 1);
 	}
 
+	/**
+	 * Names that currently exist as message endpoints: every agent record (including ones still
+	 * spawning or paused) plus the reserved "main" chat, which is always a valid target. The roster
+	 * uses it to hide historical message edges pointing at agents that are gone.
+	 */
+	liveNames(): Set<string> {
+		return new Set(["main", ...this.agents.keys()]);
+	}
+
 	/** Adjacency matrix of message counts: from -> (to -> count). Plain snapshot copy. */
 	getMessageMatrix(): Record<string, Record<string, number>> {
 		const out: Record<string, Record<string, number>> = {};

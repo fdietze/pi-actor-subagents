@@ -384,6 +384,8 @@ export default function subagents(pi: ExtensionAPI) {
             ? theme.bg("toolSuccessBg", label)
             : theme.fg("dim", label);
       const matrix = engine.getMessageMatrix();
+      // The matrix is historical; only live names may appear in the targets column.
+      const live = engine.liveNames();
       // EVERY widget line must fit the live terminal width or pi's renderer throws
       // ("Rendered line N exceeds terminal width"). pi checks against this.terminal.columns,
       // so truncate each composed line to process.stdout.columns (NOT a hardcoded width —
@@ -398,7 +400,7 @@ export default function subagents(pi: ExtensionAPI) {
           status: agentStatus(a),
           customStatus: a.customStatus,
           etaTs: a.etaTs,
-          targets: formatSendTargets(matrix, a.name),
+          targets: formatSendTargets(matrix, a.name, live),
         })),
         width,
         { styleStatus: styler },

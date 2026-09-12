@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRoutedAgentMessage, type RoutedAgentMessage } from "./agent-message.ts";
 import { agentStatus, formatStatus } from "./agent-status.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
+import { formatSendTargets } from "./panel-logic.ts";
 
 const fakeHandle = (): AgentHandle => ({
 	deliver: async () => {},
@@ -418,6 +419,20 @@ test("getMessageMatrix counts edges; multicast counts one per target", async () 
 	// snapshot is a copy, not a live reference
 	m.main.a = 999;
 	assert.equal(e.getMessageMatrix().main.a, 2);
+});
+
+test("liveNames keeps history but drops killed agents, so the roster hides dead targets", async () => {
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	e.addAgent(mainRecord());
+	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
+	e.addAgent({ ...mainRecord(), name: "helper", depth: 1 });
+	await e.route("a", "helper", "hi");
+	await e.route("a", "main", "done");
+	await e.kill("helper");
+	// Engine history is deliberately unchanged by the kill.
+	assert.equal(e.getMessageMatrix().a?.helper, 1);
+	assert.deepEqual([...e.liveNames()].sort(), ["a", "main"]);
+	assert.equal(formatSendTargets(e.getMessageMatrix(), "a", e.liveNames()), "\u279cmain");
 });
 
 test("reserve records the spawn parent (child -> parent)", () => {

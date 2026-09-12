@@ -82,19 +82,41 @@ test("formatContext renders tokens/window only (no percentage), dash when unknow
 
 test("sendTargets: ordered by count desc, alpha tiebreak; empty when none", () => {
 	const matrix = { a: { main: 3, coder: 3, zed: 1 }, b: {} };
-	assert.deepEqual(sendTargets(matrix, "a"), [
+	const live = new Set(["main", "a", "b", "coder", "zed"]);
+	assert.deepEqual(sendTargets(matrix, "a", live), [
 		{ to: "coder", count: 3 },
 		{ to: "main", count: 3 },
 		{ to: "zed", count: 1 },
 	]);
-	assert.deepEqual(sendTargets(matrix, "b"), []);
-	assert.deepEqual(sendTargets(matrix, "missing"), []);
+	assert.deepEqual(sendTargets(matrix, "b", live), []);
+	assert.deepEqual(sendTargets(matrix, "missing", live), []);
+});
+
+test("sendTargets: drops targets that are no longer live, keeps live ones in order", () => {
+	const matrix = { a: { main: 3, dead: 9, coder: 1 } };
+	assert.deepEqual(sendTargets(matrix, "a", new Set(["main", "a", "coder"])), [
+		{ to: "main", count: 3 },
+		{ to: "coder", count: 1 },
+	]);
+});
+
+test("sendTargets: only-dead targets yield no targets at all", () => {
+	const matrix = { a: { gone: 4, alsoGone: 2 } };
+	assert.deepEqual(sendTargets(matrix, "a", new Set(["main", "a"])), []);
 });
 
 test("formatSendTargets: ➜name[count], count omitted for a single message; '' when none", () => {
 	const matrix = { a: { main: 3, coder: 1 } };
-	assert.equal(formatSendTargets(matrix, "a"), "➜main[3] ➜coder");
-	assert.equal(formatSendTargets(matrix, "none"), "");
+	const live = new Set(["main", "a", "coder"]);
+	assert.equal(formatSendTargets(matrix, "a", live), "➜main[3] ➜coder");
+	assert.equal(formatSendTargets(matrix, "none", live), "");
+});
+
+test("formatSendTargets: dead targets vanish from the cell; only-dead renders empty", () => {
+	const matrix = { a: { main: 3, dead: 9 }, b: { dead: 2 } };
+	const live = new Set(["main", "a", "b"]);
+	assert.equal(formatSendTargets(matrix, "a", live), "➜main[3]");
+	assert.equal(formatSendTargets(matrix, "b", live), "");
 });
 
 // ── formatRoster: responsive aligned single-line table ──

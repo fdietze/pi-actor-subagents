@@ -382,6 +382,8 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			lines.push(theme.fg("accent", truncateToWidth(header.padEnd(width, "─"), width)));
 			const styler = styleStatus(theme);
 			const matrix = deps.engine.getMessageMatrix();
+			// The matrix is historical; only live names may appear in the targets column.
+			const live = deps.engine.liveNames();
 			for (const line of formatRoster(
 				agents().map((a) => ({
 					name: a.name,
@@ -391,7 +393,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 					status: agentStatus(a),
 					customStatus: a.customStatus,
 					etaTs: a.etaTs,
-					targets: formatSendTargets(matrix, a.name),
+					targets: formatSendTargets(matrix, a.name, live),
 				})),
 				width,
 				{

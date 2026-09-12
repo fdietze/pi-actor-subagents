@@ -25,14 +25,24 @@ export function formatContext(u: ContextUsageLike | undefined): string {
 	return `${used}/${total}`;
 }
 
-/** Send targets of an agent from the message matrix, ordered by count desc (alpha tiebreak). */
+/**
+ * Send targets of an agent from the message matrix, ordered by count desc (alpha tiebreak).
+ *
+ * The matrix is the engine's historical edge count and keeps rows for agents that already died,
+ * so the roster must not name them. `live` is the set of currently existing agent names including
+ * "main", and is a required argument (make illegal states unrepresentable: a caller cannot forget
+ * to filter). Filtering happens before sorting, so ordering and counts of the surviving targets
+ * are exactly what they were without any dead peers.
+ */
 export function sendTargets(
 	matrix: Record<string, Record<string, number>>,
 	name: string,
+	live: ReadonlySet<string>,
 ): { to: string; count: number }[] {
 	const row = matrix[name];
 	if (!row) return [];
 	return Object.entries(row)
+		.filter(([to]) => live.has(to))
 		.map(([to, count]) => ({ to, count }))
 		.sort((a, b) => b.count - a.count || a.to.localeCompare(b.to));
 }
@@ -40,9 +50,14 @@ export function sendTargets(
 /**
  * Roster cell of send targets: "➜main[3] ➜coder" (most-messaged first); "" when none.
  * The [count] is shown only when >1 message — a single message reads cleaner as plain "➜main".
+ * Targets outside `live` (dead agents) are omitted; an agent whose peers all died renders "".
  */
-export function formatSendTargets(matrix: Record<string, Record<string, number>>, name: string): string {
-	const t = sendTargets(matrix, name);
+export function formatSendTargets(
+	matrix: Record<string, Record<string, number>>,
+	name: string,
+	live: ReadonlySet<string>,
+): string {
+	const t = sendTargets(matrix, name, live);
 	if (t.length === 0) return "";
 	return t.map((x) => (x.count > 1 ? `➜${x.to}[${x.count}]` : `➜${x.to}`)).join(" ");
 }
