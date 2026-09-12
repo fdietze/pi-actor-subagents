@@ -37,9 +37,9 @@ test("reportError ends the turn and surfaces the error status", () => {
 	assert.equal(e.events.at(-1)?.type, "error");
 });
 
-test("entering the error state emits one event per failed turn, on both failure paths", () => {
+test("entering the error state emits one event per failed run, on both failure paths", () => {
 	// The parent notification hangs off this event, so it must fire once for a thrown exception AND
-	// once for a turn the SDK stopped retrying (agent_end -> setStopReason), and not repeat while
+	// once for a logical run the SDK settled after retries, and not repeat while
 	// the agent simply stays errored.
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "w", depth: 1 });

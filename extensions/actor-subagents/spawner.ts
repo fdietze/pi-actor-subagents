@@ -12,11 +12,15 @@ import { formatModelThinking, type ThinkingLevel } from "./thinking-level.ts";
 
 export type { ThinkingLevel } from "./thinking-level.ts";
 
-/** Terminal stopReason of the last assistant message in a transcript (undefined if none). */
-function lastStopReason(messages: unknown[]): StopReason | undefined {
+/** Terminal outcome of the last assistant message in a transcript (undefined if none). */
+function lastAssistantOutcome(
+	messages: unknown[],
+): { stopReason: StopReason | undefined; errorMessage: string | undefined } | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i] as { role?: string; stopReason?: StopReason };
-		if (m.role === "assistant") return m.stopReason;
+		const message = messages[i] as { role?: string; stopReason?: StopReason; errorMessage?: string };
+		if (message.role === "assistant") {
+			return { stopReason: message.stopReason, errorMessage: message.errorMessage };
+		}
 	}
 	return undefined;
 }
@@ -187,8 +191,12 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			if (ev.type === "agent_end") {
 				streamingRef.msg = undefined; // safety net: clear any partial left if message_end was skipped
 				engine.endTurn(name);
-				// Surface the turn's terminal outcome at idle (error after retries / truncated).
-				engine.setStopReason(name, lastStopReason(session.messages));
+			}
+			if (ev.type === "agent_settled") {
+				// The SDK emits agent_end for every retry attempt. Only agent_settled closes the
+				// logical run, so deriving its outcome here produces one parent notification.
+				const outcome = lastAssistantOutcome(session.messages);
+				engine.setStopReason(name, outcome?.stopReason, outcome?.errorMessage);
 			}
 			onActivity?.();
 		});

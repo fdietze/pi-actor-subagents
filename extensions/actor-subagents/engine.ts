@@ -722,8 +722,8 @@ export class Engine {
 
 	/** Report an async failure (e.g. a fire-and-forget delivery turn that later threw). */
 	reportError(name: string, reason: string): void {
-		// A failed turn may never fire agent_end, so close the turn here to avoid the status
-		// sticking at thinking/writing/tool.
+		// A failed delivery may emit no session lifecycle event, so close the turn here to avoid
+		// the status sticking at thinking/writing/tool.
 		this.endTurn(name);
 		// Order matters: endTurn does NOT clear stopReason, so the error state is entered after it.
 		this.setStopReason(name, "error", reason);
@@ -733,8 +733,8 @@ export class Engine {
 	 * Record the terminal reason of an agent's last turn (shown at idle via agentStatus), and emit
 	 * the `error` event when this is the TRANSITION into the error state.
 	 *
-	 * One emit site for both ways an agent breaks — a thrown exception (reportError) and a turn the
-	 * SDK gave up retrying (agent_end) — so consumers see the failure exactly once per failed turn
+	 * One emit site for both ways an agent breaks — a thrown exception (reportError) and a logical
+	 * run the SDK settled after exhausting retries — so consumers see the failure once per failed run
 	 * regardless of which path produced it. `beginTurn` clears stopReason, so the next failure is a
 	 * fresh transition; a repeated error report within the same errored state stays silent instead
 	 * of waking the parent again for the same failure.

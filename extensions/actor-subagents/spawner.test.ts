@@ -280,6 +280,41 @@ test("view.getStreamingMessage tracks the in-progress assistant message, cleared
 	assert.equal(view?.getStreamingMessage?.(), undefined); // finalized into session.messages
 });
 
+test("retries produce one terminal error per settled logical run", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	withMain(engine, []);
+	const session = new FakeSession();
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "worker", systemPrompt: "work" }, "main");
+	const errors = () => engine.events.filter((event) => event.type === "error");
+
+	// One logical run can contain several provider attempts. None is terminal until the session
+	// settles, and the final assistant error is what the parent needs to diagnose the failure.
+	for (let attempt = 0; attempt < 4; attempt++) {
+		session.messages.push({ role: "assistant", stopReason: "error", errorMessage: "rate limit exceeded" });
+		session.emit("agent_end");
+	}
+	assert.equal(errors().length, 0);
+	assert.equal(engine.get("worker")?.stopReason, undefined);
+
+	session.emit("agent_settled");
+	assert.equal(errors().length, 1);
+	assert.equal(errors()[0]?.reason, "rate limit exceeded");
+	assert.equal(engine.get("worker")?.stopReason, "error");
+
+	// A separately prompted logical run clears the prior outcome and may notify once again.
+	session.emit("agent_start");
+	session.messages.push({ role: "assistant", stopReason: "error", errorMessage: "provider unavailable" });
+	session.emit("agent_end");
+	session.emit("agent_settled");
+	assert.equal(errors().length, 2);
+	assert.equal(errors()[1]?.reason, "provider unavailable");
+});
+
 test("view.getToolDefinition reaches the session's tool registry (what makes the panel render calls)", async () => {
 	// The panel builds its ToolExecutionComponent from this definition; without it a pending call
 	// renders as the bare tool name instead of the tool's own call preview.
