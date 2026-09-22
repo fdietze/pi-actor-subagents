@@ -257,9 +257,13 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		// Retune adapter: apply what was asked, then report what the session ENDED UP with. The
 		// level is read back because a model clamps an effort it cannot deliver, and the order
 		// matters — the model must be in place before its clamping can be observed.
+		// An omitted level means "keep the current one" (the tool contract). pi's setModel instead
+		// applies the human's configured default level, so the current level is captured first and
+		// re-requested after the switch; the new model still clamps it.
 		const reconfigure: NonNullable<AgentRecord["reconfigure"]> = async (change) => {
+			const level = change.thinkingLevel ?? session.thinkingLevel;
 			if (change.model) await session.setModel(change.model.model);
-			if (change.thinkingLevel) session.setThinkingLevel(change.thinkingLevel);
+			session.setThinkingLevel(level);
 			return { model: change.model?.display, thinkingLevel: session.thinkingLevel };
 		};
 		return { handle, view, close: createSessionCloser(session, detach), reconfigure };

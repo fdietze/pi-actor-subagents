@@ -543,6 +543,29 @@ test("a spawned agent can be retuned in place, and the roster adopts the session
 	assert.equal(engine.get("echo")?.thinkingLevel, "low");
 });
 
+test("a model-only retune keeps the agent's current thinking level", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	withMain(engine, []);
+	// Mirrors pi >= 0.87: setModel replaces the level with the configured default.
+	const session = new FakeSession();
+	session.thinkingLevel = "low";
+	session.setModel = async (model: unknown) => {
+		session.models.push(model);
+		session.thinkingLevel = "high";
+	};
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "test", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "echo", systemPrompt: "reply" }, "main");
+
+	const result = await engine.retune("echo", { model: { display: "test/opus", model: {} } });
+	assert.equal(result.ok, true);
+	assert.equal(session.thinkingLevel, "low");
+	assert.equal(engine.get("echo")?.thinkingLevel, "low");
+});
+
 test("aborting an agent interrupts its running bash before stopping the agent loop", async () => {
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
