@@ -41,6 +41,7 @@ import {
   formatContext,
   formatRoster,
   formatSendTargets,
+  rosterDepth,
   type StatusTone,
   swarmStateLine,
 } from "./panel-logic.ts";
@@ -377,8 +378,9 @@ export default function subagents(pi: ExtensionAPI) {
       // Permanent roster display above the editor (plan-mode pattern, no overlay).
       // Only show when at least one background agent exists (just 'main' alone is
       // redundant) and the /subagents panel is not already open.
-      // Only show background agents ('main' = the chat itself, redundant).
-      const background = agents.filter((a) => a.name !== "main");
+      // Only show background agents ('main' = the chat itself, redundant); the spawn-tree depth
+      // of each entry becomes the row indent, with main's children as the visible roots.
+      const background = agents.filter((o) => o.agent.name !== "main");
       const theme = ui.theme;
       const styler = (label: string, tone: StatusTone) =>
         tone === "error"
@@ -395,8 +397,9 @@ export default function subagents(pi: ExtensionAPI) {
       // that crashed on narrower terminals). truncateToWidth is ANSI/unicode aware.
       const width = process.stdout.columns ?? 80;
       const rosterLines = formatRoster(
-        background.map((a) => ({
+        background.map(({ agent: a, depth }) => ({
           name: a.name,
+          depth: rosterDepth(depth),
           model: a.model,
           thinkingLevel: a.thinkingLevel,
           context: formatContext(a.view?.getContextUsage()),
@@ -409,7 +412,7 @@ export default function subagents(pi: ExtensionAPI) {
         { styleStatus: styler },
       ).map((line) => truncateToWidth(line, width));
       const running = background.filter(
-        (a) => agentStatus(a).kind === "working",
+        (o) => agentStatus(o.agent).kind === "working",
       ).length;
       const stateLine = swarmStateLine(
         engine.isPaused(),

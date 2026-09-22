@@ -7,6 +7,10 @@
  * only orders siblings, so an agent sits close to who spawned it AND to its tightest parent
  * communication partner — as far as a 1D list allows (the full goal is Minimum Linear
  * Arrangement, NP-hard; the spawn tree is the stable backbone, comms order siblings only).
+ *
+ * The same traversal yields each agent's depth, which the listings turn into an indent. Depth
+ * comes from the traversal rather than from a stored field so indent and order can never
+ * disagree (correctness by construction): an orphan is ordered as a root, so it is depth 0.
  */
 
 export interface OrderableAgent {
@@ -21,10 +25,16 @@ function parentTraffic(agent: OrderableAgent, matrix: Record<string, Record<stri
 	return (matrix[name]?.[spawnedBy] ?? 0) + (matrix[spawnedBy]?.[name] ?? 0);
 }
 
+/** An agent in listing order, with its depth in the spawn tree (roots — main and orphans — are 0). */
+export interface OrderedAgent<T> {
+	agent: T;
+	depth: number;
+}
+
 export function orderAgents<T extends OrderableAgent>(
 	agents: T[],
 	matrix: Record<string, Record<string, number>>,
-): T[] {
+): OrderedAgent<T>[] {
 	const live = new Set(agents.map((x) => x.name));
 
 	// Partition into roots (own parent = main, or parent no longer live = orphan) and children.
@@ -50,20 +60,21 @@ export function orderAgents<T extends OrderableAgent>(
 	roots.sort(byRoot);
 
 	// Pre-order DFS; the visited set makes a spawn cycle terminate.
-	const result: T[] = [];
+	const result: OrderedAgent<T>[] = [];
 	const visited = new Set<string>();
-	const visit = (agent: T): void => {
+	const visit = (agent: T, depth: number): void => {
 		if (visited.has(agent.name)) return;
 		visited.add(agent.name);
-		result.push(agent);
-		for (const child of children.get(agent.name) ?? []) visit(child);
+		result.push({ agent, depth });
+		for (const child of children.get(agent.name) ?? []) visit(child, depth + 1);
 	};
-	for (const root of roots) visit(root);
+	for (const root of roots) visit(root, 0);
 
 	// Safety: anything unreachable (disconnected or stuck in a cycle) is appended in
-	// createdAt order, so the output is always a permutation of the input.
+	// createdAt order, so the output is always a permutation of the input. Each such agent
+	// enters as a root (depth 0): whoever spawned it is not part of the rendered tree.
 	if (result.length < agents.length) {
-		for (const agent of [...agents].sort(byRoot)) if (!visited.has(agent.name)) visit(agent);
+		for (const agent of [...agents].sort(byRoot)) if (!visited.has(agent.name)) visit(agent, 0);
 	}
 
 	return result;

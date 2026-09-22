@@ -33,6 +33,7 @@ import type { Engine } from "./engine.ts";
 import {
 	formatContext,
 	formatRoster,
+	rosterDepth,
 	formatSendTargets,
 	type StatusTone,
 	moveSelection,
@@ -122,7 +123,11 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 	// 'main' is not listed in the panel (= the main chat you are already in).
 	// Spawn-tree order (parent followed by its subtree; siblings by parent traffic), then drop
 	// main. Recomputed per access so it tracks live spawns/messages.
-	const agents = () => orderAgents(deps.engine.list(), deps.engine.getMessageMatrix()).filter((a) => a.name !== "main");
+	// Ordered entries carry the spawn-tree depth the rows indent by; main is dropped, so its
+	// children (depth 1) are the visible roots and render at indent 0.
+	const ordered = () =>
+		orderAgents(deps.engine.list(), deps.engine.getMessageMatrix()).filter((o) => o.agent.name !== "main");
+	const agents = () => ordered().map((o) => o.agent);
 	const refresh = () => tui.requestRender();
 	const selectedName = () => agents()[selectedIndex]?.name;
 
@@ -385,8 +390,9 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			// The matrix is historical; only live names may appear in the targets column.
 			const live = deps.engine.liveNames();
 			for (const line of formatRoster(
-				agents().map((a) => ({
+				ordered().map(({ agent: a, depth }) => ({
 					name: a.name,
+					depth: rosterDepth(depth),
 					model: a.model,
 					thinkingLevel: a.thinkingLevel,
 					context: formatContext(a.view?.getContextUsage()),

@@ -121,7 +121,7 @@ test("formatSendTargets: dead targets vanish from the cell; only-dead renders em
 
 // ── formatRoster: responsive aligned single-line table ──
 const idle = { kind: "idle" } as const;
-const re = (over: Record<string, unknown> = {}) => ({ name: "a", model: "x/y", context: "", status: idle, ...over });
+const re = (over: Record<string, unknown> = {}) => ({ name: "a", depth: 0, model: "x/y", context: "", status: idle, ...over });
 
 test("formatRoster: aligns the status column across rows (shared name-column width)", () => {
 	const rows = formatRoster([re({ name: "ab" }), re({ name: "abcdef", status: { kind: "working", phase: "thinking" } })], 200);
@@ -335,4 +335,22 @@ test("toolCalls extracts id/name/arguments from assistant content", () => {
 	};
 	assert.deepEqual(toolCalls(m), [{ id: "c1", name: "send_message", arguments: { to: "main", content: "hi" } }]);
 	assert.deepEqual(toolCalls({ role: "user", content: "hi" }), []);
+});
+
+test("formatRoster: indents each row by one space per depth level", () => {
+	const rows = formatRoster([re({ name: "lead", depth: 0 }), re({ name: "helper", depth: 1 })], 200);
+	assert.match(rows[0], /^lead /);
+	assert.match(rows[1], /^ helper /);
+});
+
+test("formatRoster: indent keeps the columns aligned", () => {
+	const rows = formatRoster([re({ name: "lead", depth: 0 }), re({ name: "helper", depth: 2 })], 200);
+	assert.equal(rows[0].indexOf("x/y"), rows[1].indexOf("x/y"));
+});
+
+test("formatRoster: the indent adds to the name cap, so a deep name is not elided more", () => {
+	const long = "a".repeat(30);
+	const flat = formatRoster([re({ name: long, depth: 0 })], 200)[0];
+	const deep = formatRoster([re({ name: long, depth: 3 })], 200)[0];
+	assert.equal(deep, `   ${flat}`); // same 24-char name cell, only shifted by the indent
 });

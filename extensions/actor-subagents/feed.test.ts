@@ -9,6 +9,7 @@ import {
 } from "./feed.ts";
 import type { AgentStatus } from "./agent-status.ts";
 import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
+import type { OrderedAgent } from "./agent-order.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 	name: "a",
@@ -22,12 +23,19 @@ const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 	...over,
 });
 
+// formatSnapshot consumes the spawn-tree order; these tests supply it as main + one level of
+// children, which is what orderAgents produces for a flat swarm.
+const flat = (agents: AgentRecord[]): OrderedAgent<AgentRecord>[] =>
+	agents.map((agent) => ({ agent, depth: agent.name === "main" ? 0 : 1 }));
+const snapshot = (agents: AgentRecord[], viewer: string, paused?: boolean, now?: number): string =>
+	formatSnapshot(flat(agents), viewer, paused, now);
+
 test("formatSnapshot lists each agent with status and turns", () => {
 	const agents = [
 		rec({ name: "main", depth: 0, model: "anthropic/opus" }),
 		rec({ name: "coder", activity: "thinking", turns: 4 }),
 	];
-	const out = formatSnapshot(agents, "main");
+	const out = snapshot(agents, "main");
 	assert.match(out, /main/);
 	assert.match(out, /coder/);
 	assert.match(out, /thinking/); // mid-turn, opening phase
@@ -40,7 +48,7 @@ test("formatSnapshot keeps columns aligned when one status is long", () => {
 		rec({ name: "a", turns: 1 }),
 		rec({ name: "b", activity: "thinking", customStatus: "running the whole test suite", etaTs: 0 }),
 	];
-	const lines = formatSnapshot(agents, "main").split("\n").slice(1);
+	const lines = snapshot(agents, "main").split("\n").slice(1);
 	// The ETA must survive (it is the point of the column) and 'turns:' must start at one column.
 	assert.match(lines[1], /ETA ~/);
 	assert.equal(lines[0].indexOf("turns:"), lines[1].indexOf("turns:"));
@@ -48,21 +56,21 @@ test("formatSnapshot keeps columns aligned when one status is long", () => {
 
 test("formatSnapshot does not invent a turn count or a spawner for main", () => {
 	// main's turns are pi's own, not the engine's, and it has no spawner; "turns:0 (by main)" would lie.
-	const out = formatSnapshot([rec({ name: "main", depth: 0 })], "main");
+	const out = snapshot([rec({ name: "main", depth: 0 })], "main");
 	assert.match(out, /turns:-/);
 	assert.match(out, /\(foreground\)/);
 	assert.doesNotMatch(out, /\(by main\)/);
 });
 
 test("formatSnapshot exposes the paused scheduler and buffering behavior", () => {
-	const out = formatSnapshot([rec({ name: "scout" })], "main", true);
+	const out = snapshot([rec({ name: "scout" })], "main", true);
 	assert.match(out, /PAUSED/);
 	assert.match(out, /messages are buffering/);
 	assert.match(out, /subagents-resume/);
 });
 
 test("formatSnapshot shows model and effective thinking level together", () => {
-	const out = formatSnapshot(
+	const out = snapshot(
 		[rec({ name: "scout", model: "openai-codex/gpt-5.6-sol", thinkingLevel: "xhigh" })],
 		"main",
 	);
@@ -71,7 +79,7 @@ test("formatSnapshot shows model and effective thinking level together", () => {
 
 test("formatSnapshot appends the agent-set custom status after the system status", () => {
 	const agents = [rec({ name: "coder", customStatus: "parsing files" })];
-	const out = formatSnapshot(agents, "main");
+	const out = snapshot(agents, "main");
 	assert.match(out, /idle · parsing files/);
 });
 
@@ -79,12 +87,12 @@ test("formatSnapshot renders the ETA as absolute clock time after the custom sta
 	const now = new Date();
 	now.setHours(15, 0, 0, 0);
 	const agents = [rec({ name: "coder", customStatus: "running tests", etaTs: now.getTime() + 20 * 60000 })];
-	const out = formatSnapshot(agents, "main", false, now.getTime());
+	const out = snapshot(agents, "main", false, now.getTime());
 	assert.match(out, /idle · running tests · ETA ~15:20/);
 });
 
 test("formatSnapshot omits the ETA when etaTs is unset", () => {
-	const out = formatSnapshot([rec({ name: "coder", customStatus: "running tests" })], "main");
+	const out = snapshot([rec({ name: "coder", customStatus: "running tests" })], "main");
 	assert.doesNotMatch(out, /ETA/);
 });
 
@@ -93,7 +101,7 @@ test("formatSnapshot renders fine-grained activity (writing / tool:name)", () =>
 		rec({ name: "w", activity: "writing" }),
 		rec({ name: "t", activity: "tool", currentTool: "bash" }),
 	];
-	const out = formatSnapshot(agents, "main");
+	const out = snapshot(agents, "main");
 	assert.match(out, /writing/);
 	assert.match(out, /tool:bash/);
 });
@@ -106,7 +114,7 @@ test("formatSnapshot shows pending agents as spawning (not idle) with queue coun
 			buffer: [{ parts: [{ from: "main", content: "a" }] }, { parts: [{ from: "main", content: "b" }] }],
 		}),
 	];
-	const out = formatSnapshot(agents, "main");
+	const out = snapshot(agents, "main");
 	assert.match(out, /spawning/);
 	assert.doesNotMatch(out, /idle/);
 	assert.match(out, /2 queued/);
@@ -120,7 +128,7 @@ test("formatSnapshot marks relation to the viewer", () => {
 		rec({ name: "sibling", spawnedBy: "main" }),
 		rec({ name: "worker", spawnedBy: "lead" }),
 	];
-	const out = formatSnapshot(agents, "lead");
+	const out = snapshot(agents, "lead");
 	assert.match(out, /lead .*self/);
 	assert.match(out, /main .*parent/);
 	assert.match(out, /sibling .*peer/);
@@ -137,7 +145,7 @@ test("formatSnapshot shows context percent and relative age", () => {
 			subscribe: () => () => {},
 		},
 	});
-	const out = formatSnapshot([withCtx], "main", false, 10_000);
+	const out = snapshot([withCtx], "main", false, 10_000);
 	assert.match(out, /ctx:42%/);
 	assert.match(out, /last 5s/);
 });
@@ -233,4 +241,31 @@ test("formatKillResult: killed + failed split", () => {
 		"killed a · failed: main: cannot kill 'main'",
 	);
 	assert.equal(formatKillResult([]), "error: no targets");
+});
+
+// ── spawn-tree indent (one space per depth level; main is listed, so it sits at 0) ──
+
+test("formatSnapshot indents each agent by its spawn-tree depth", () => {
+	const out = formatSnapshot(
+		[
+			{ agent: rec({ name: "main", depth: 0 }), depth: 0 },
+			{ agent: rec({ name: "lead" }), depth: 1 },
+			{ agent: rec({ name: "helper", spawnedBy: "lead" }), depth: 2 },
+		],
+		"main",
+	).split("\n");
+	assert.match(out[1], /^ {2}main /);
+	assert.match(out[2], /^ {3}lead /);
+	assert.match(out[3], /^ {4}helper /);
+});
+
+test("formatSnapshot keeps the columns aligned across indent levels", () => {
+	const rows = formatSnapshot(
+		[
+			{ agent: rec({ name: "main", depth: 0 }), depth: 0 },
+			{ agent: rec({ name: "deep", spawnedBy: "lead" }), depth: 3 },
+		],
+		"main",
+	).split("\n").slice(1);
+	assert.equal(rows[0].indexOf("turns:"), rows[1].indexOf("turns:"));
 });

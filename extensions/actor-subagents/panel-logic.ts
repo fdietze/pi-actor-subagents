@@ -64,6 +64,11 @@ export function formatSendTargets(
 
 export interface RosterEntry {
 	name: string;
+	/**
+	 * Indent level of the row (one space per level); `rosterDepth` derives it from the
+	 * spawn-tree depth of orderAgents, so the indent always matches the order.
+	 */
+	depth: number;
 	model: string;
 	thinkingLevel?: ThinkingLevel;
 	context: string;
@@ -76,6 +81,12 @@ export interface RosterEntry {
 	/** Send targets cell (formatSendTargets); appended in full, never truncated. */
 	targets?: string;
 }
+
+/**
+ * Roster indent level from a spawn-tree depth. This roster hides main, so main's children are
+ * the visible roots. An orphan is ordered as a root (depth 0) and stays at 0.
+ */
+export const rosterDepth = (depth: number): number => Math.max(0, depth - 1);
 
 /**
  * Scheduler state line, shown below the roster (panel) and footer. `swarmPaused` is the
@@ -134,6 +145,8 @@ export function formatModel(model: string | undefined, thinkingLevel: ThinkingLe
 // at all. The rest collapse — whole column dropped, all rows — when the terminal is too narrow,
 // least informative first:
 //   targets → custom-status → context → eta → model
+// The name cell carries the spawn-tree indent (one space per depth level), added on top of the
+// name's own cap so nesting never costs name characters.
 // Alignment requires a roster-wide pass (column widths = max content across agents), so this
 // replaces any per-row formatting. Layout math is plain-text (ASCII content + single-width
 // glyphs); the status cell is styled only AFTER padding so ANSI never corrupts the widths.
@@ -190,7 +203,13 @@ export function formatRoster(
 	const styleStatus = opts.styleStatus ?? ((l) => l);
 
 	const cols: ColSpec[] = [
-		{ key: "name", collapseRank: 0, fit: "middle", cap: NAME_CAP, cellOf: (e) => e.name },
+		{
+			key: "name",
+			collapseRank: 0,
+			fit: "middle",
+			// Cap the name itself, then prefix the indent: the column is NAME_CAP + deepest indent wide.
+			cellOf: (e) => `${" ".repeat(e.depth)}${fitMiddle(e.name, NAME_CAP)}`,
+		},
 		{ key: "status", collapseRank: 0, fit: "end", cap: SYS_STATUS_CAP, cellOf: (e) => formatStatus(e.status) },
 		{ key: "model", collapseRank: 5, fit: "end", cellOf: (e) => formatModel(e.model, e.thinkingLevel) },
 		{ key: "eta", collapseRank: 4, fit: "end", cellOf: (e) => (e.etaTs != null ? formatEtaSuffix(e.etaTs) : "") },

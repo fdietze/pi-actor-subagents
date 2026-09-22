@@ -2,6 +2,7 @@
  * Pure formatting for the read-only observability of the agents.
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
+import type { OrderedAgent } from "./agent-order.ts";
 import { agentStatus, formatStatus } from "./agent-status.ts";
 import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
@@ -30,21 +31,28 @@ function relTo(a: AgentRecord, viewer: string, viewerParent: string | undefined)
  * signals (spawning vs idle, context pressure, staleness) and the relation to the
  * viewer so an agent can decide: message, wait, or wind down. `now` is injected
  * for testability.
+ *
+ * Takes the spawn-tree order from orderAgents, whose depth becomes the name indent (one space
+ * per level). main is listed here, so it renders at indent 0 and its children at 1.
  */
 export function formatSnapshot(
-	agents: AgentRecord[],
+	ordered: OrderedAgent<AgentRecord>[],
 	viewer: string,
 	paused: boolean = false,
 	now: number = Date.now(),
 ): string {
-	if (agents.length === 0) return "no agents";
+	if (ordered.length === 0) return "no agents";
+	const agents = ordered.map((o) => o.agent);
 	// Columns are sized from the widest actual cell (clamped), not from a guessed constant:
 	// padding alone leaves one long status shifting every later column on every other row,
 	// while a fixed narrow column would routinely cut off the ETA. The clamp keeps a single
 	// pathological name or status from stretching the whole table (Margin of Safety).
 	const NAME_CAP = 20;
 	const STATUS_CAP = 56;
-	const fit = (s: string, w: number) => (s.length > w ? `${s.slice(0, w - 1)}\u2026` : s.padEnd(w));
+	const clip = (s: string, w: number) => (s.length > w ? `${s.slice(0, w - 1)}\u2026` : s);
+	const fit = (s: string, w: number) => clip(s, w).padEnd(w);
+	// The indent sits on top of the name cap, so nesting never costs name characters.
+	const nameCell = (o: OrderedAgent<AgentRecord>) => `${" ".repeat(o.depth)}${clip(o.agent.name, NAME_CAP)}`;
 	const viewerParent = agents.find((a) => a.name === viewer)?.spawnedBy;
 	// Custom status (with any ETA) shown right after the system status, matching the TUI roster ("idle · ...").
 	const statusOf = (a: AgentRecord) => {
@@ -53,15 +61,13 @@ export function formatSnapshot(
 		return customDisplay ? `${label} · ${customDisplay}` : label;
 	};
 	const widest = (lengths: number[], cap: number) => Math.min(cap, Math.max(...lengths));
-	const nameW = widest(
-		agents.map((a) => a.name.length),
-		NAME_CAP,
-	);
+	const nameW = Math.max(...ordered.map((o) => nameCell(o).length));
 	const statusW = widest(
 		agents.map((a) => statusOf(a).length),
 		STATUS_CAP,
 	);
-	const rows = agents.map((a) => {
+	const rows = ordered.map((o) => {
+		const a = o.agent;
 		const status = statusOf(a);
 		const u = a.view?.getContextUsage();
 		const ctx = u && u.percent != null ? `${Math.round(u.percent)}%` : "--";
@@ -74,7 +80,7 @@ export function formatSnapshot(
 		const turns = isMain ? "-" : String(a.turns);
 		const origin = isMain ? "(foreground)" : `(by ${a.spawnedBy}${queued})`;
 		return (
-			`  ${fit(a.name, nameW)} ${rel.padEnd(6)} ${fit(status, statusW)} ` +
+			`  ${nameCell(o).padEnd(nameW)} ${rel.padEnd(6)} ${fit(status, statusW)} ` +
 			`turns:${turns.padEnd(3)} ctx:${ctx.padEnd(4)} last ${formatAge(now - a.lastActivity).padEnd(4)} ` +
 			`${model}  ${origin}`
 		);
