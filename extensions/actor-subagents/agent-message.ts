@@ -67,16 +67,19 @@ export function parseRoutedAgentMessage(value: unknown): RoutedAgentMessage | un
 	return parts.length > 0 ? { parts } : undefined;
 }
 
+// The label names the sender(s) as "from <name>": senders include 'main' and the scheduler,
+// which are not subagents, so the label states direction rather than a role.
 export function formatAgentMessageDisplay(message: RoutedAgentMessage): { label: string; body: string } {
 	const senders = [...new Set(message.parts.map((part) => part.from))];
+	const label = `from ${senders.join(", ")}`;
 	if (senders.length === 1) {
 		return {
-			label: `subagent: ${senders[0]}`,
+			label,
 			body: message.parts.map((part) => part.content).join("\n\n"),
 		};
 	}
 	return {
-		label: `subagents: ${senders.join(", ")}`,
+		label,
 		body: message.parts.map((part) => `[${part.from}]\n${part.content}`).join("\n\n"),
 	};
 }

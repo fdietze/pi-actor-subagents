@@ -17,7 +17,7 @@ test("a routed agent message keeps structured provenance and a provider-visible 
 		details: routed,
 	});
 	assert.deepEqual(formatAgentMessageDisplay(routed), {
-		label: "subagent: reviewer",
+		label: "from reviewer",
 		body: "Found the cause.",
 	});
 });
@@ -33,7 +33,7 @@ test("an atomic paused-inbox batch preserves every sender and message", () => {
 		"[message from reviewer]: First finding.\n\n[message from coder]: Applied the fix.",
 	);
 	assert.deepEqual(formatAgentMessageDisplay(merged), {
-		label: "subagents: reviewer, coder",
+		label: "from reviewer, coder",
 		body: "[reviewer]\nFirst finding.\n\n[coder]\nApplied the fix.",
 	});
 });

@@ -68,7 +68,7 @@ test("formatHistory labels peer traffic as a subagent message, not a user messag
 			},
 		],
 	});
-	assert.match(out, /#0 subagent: reviewer: Found it\./);
+	assert.match(out, /#0 from reviewer: Found it\./);
 	assert.doesNotMatch(out, /#0 user:/);
 });
 
