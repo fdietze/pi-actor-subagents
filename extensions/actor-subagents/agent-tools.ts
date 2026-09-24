@@ -22,7 +22,6 @@ import { orderAgents } from "./agent-order.ts";
 import type { ControlResult, Engine, EngineResumeResult } from "./engine.ts";
 import {
   formatControlResult,
-  formatKillResult,
   formatMulticastResult,
   formatResumeResult,
   formatSnapshot,
@@ -147,14 +146,14 @@ export function makeAgentTools(
         systemPrompt: Type.String({
           description: "System prompt defining the agent's behavior",
         }),
-        overrideModel: Type.Optional(
+        model: Type.Optional(
           Type.String({
             description:
               "Omit to inherit your current model (the default — almost always correct). Set 'provider/id' " +
               "ONLY when the user explicitly named a specific model; a wrong value returns the available list.",
           }),
         ),
-        overrideThinkingLevel: Type.Optional(
+        thinkingLevel: Type.Optional(
           StringEnum(THINKING_LEVELS, {
             description:
               "often described as <model>@<thinking level>. Omit to inherit your current effective thinking level / effort.",
@@ -168,13 +167,12 @@ export function makeAgentTools(
         }),
       }),
       execute: async (_id, args) => {
-        // Agent-facing override names map to the SDK-free SpawnSpec fields.
         const res = await spawnAgent(
           {
             name: args.name,
             systemPrompt: args.systemPrompt,
-            model: args.overrideModel,
-            thinkingLevel: args.overrideThinkingLevel,
+            model: args.model,
+            thinkingLevel: args.thinkingLevel,
             message: args.message,
           },
           selfName,
@@ -307,11 +305,11 @@ export function makeAgentTools(
       },
     }),
     defineTool({
-      name: "kill_subagent",
-      label: "Kill Subagent",
+      name: "kill_subagents",
+      label: "Kill Subagents",
       renderCall: (args, theme, context) =>
         renderToolArgs(
-          "kill_subagent",
+          "kill_subagents",
           args as Record<string, unknown>,
           theme as RenderTheme,
           context?.expanded ?? false,
@@ -319,25 +317,19 @@ export function makeAgentTools(
       description:
         "Terminate agents in your subtree (those you spawned, and theirs) by name array. Killing an agent also kills the agents it spawned (its whole subtree); the result names every agent taken down.",
       parameters: Type.Object({
-        name: Type.Array(Type.String(), {
-          description: "List of agent names to terminate",
+        // Required and non-empty, unlike pause/resume: a kill cannot be undone, so it never
+        // defaults to "all".
+        names: Type.Array(Type.String(), {
+          minItems: 1,
+          description: "Agents in your subtree to terminate",
         }),
       }),
       execute: async (_id, args) => {
-        const targets = normalizeTargets(args.name);
-        const results = [];
-        for (const target of targets) {
-          const result = await engine.kill(selfName, target);
-          results.push(
-            result.ok
-              ? { target, ok: true, killed: result.killed }
-              : { target, ok: false, reason: result.reason },
-          );
-        }
+        const result = await engine.kill(selfName, normalizeTargets(args.names));
         persistRoster();
         return {
-          content: [{ type: "text", text: formatKillResult(results) }],
-          details: {},
+          content: [{ type: "text", text: formatControlResult("kill", result) }],
+          details: result,
         };
       },
     }),
@@ -368,7 +360,7 @@ export function makeAgentTools(
         const result = pauseAgents(selfName, normalizeTargets(args.names ?? []));
         return {
           content: [{ type: "text", text: formatControlResult("pause", result) }],
-          details: {},
+          details: result,
         };
       },
     }),
@@ -397,7 +389,7 @@ export function makeAgentTools(
         const result = resumeAgents(selfName, normalizeTargets(args.names ?? []));
         return {
           content: [{ type: "text", text: formatResumeResult(result) }],
-          details: {},
+          details: result,
         };
       },
     }),

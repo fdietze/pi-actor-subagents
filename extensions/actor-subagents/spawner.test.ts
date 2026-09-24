@@ -485,9 +485,9 @@ test("kill closes a child session exactly once in abortBash-abort-detach-shutdow
 	assert.ok(close);
 	await Promise.all([close(), close()]);
 
-	const result = await engine.kill("main", "child");
+	const result = await engine.kill("main", ["child"]);
 
-	assert.equal(result.ok, true);
+	assert.deepEqual(result.affected, ["child"]);
 	assert.deepEqual(session.lifecycle, ["abortBash", "abort", "detach", "shutdown", "dispose"]);
 });
 
@@ -506,7 +506,7 @@ test("a child killed while session creation is pending closes the orphan runtime
 	});
 	const spawning = spawner.spawnAgent({ name: "child", systemPrompt: "r" }, "main");
 	assert.equal(engine.get("child")?.pending, true);
-	await engine.kill("main", "child");
+	await engine.kill("main", ["child"]);
 
 	finishCreation({ session });
 	const result = await spawning;

@@ -157,9 +157,6 @@ export interface ControlResult {
 	affected: string[];
 }
 
-/** Kill reports every name it took down, because killing a parent takes its subtree with it. */
-export type KillResult = { ok: true; killed: string[] } | { ok: false; reason: string };
-
 /**
  * Structured routing result: the MESSAGE's fate only. The RECEIVER's liveness is the separate,
  * orthogonal axis reported by `awaitReaction` (see `Reaction`), so neither answer has to be
@@ -366,18 +363,37 @@ export class Engine {
 	}
 
 	/**
-	 * `by` kills an agent in its subtree AND that agent's whole subtree, deepest first, awaiting
-	 * each runtime teardown.
+	 * `by` kills the named agents in its subtree, each AND its whole subtree, deepest first,
+	 * awaiting each runtime teardown. `affected` names every agent taken down, since that is more
+	 * than the caller named. There is no "all" default: a kill cannot be undone.
 	 *
 	 * The spawn tree is the ownership structure: a child exists to serve its spawner, and its
 	 * only upward channel is that spawner. Orphaning it leaves an agent nobody reads, still
 	 * holding one of the `maxAgents` slots and still able to run turns — a leak with no
 	 * reader (Second-Order Thinking). Killing individual leaves stays possible: name them.
 	 */
-	async kill(by: string, name: string): Promise<KillResult> {
-		const check = this.authorize(by, name);
-		if (!check.ok) return check;
+	async kill(by: string, names: string[]): Promise<ControlResult> {
+		const results: TargetOutcome[] = [];
+		const affected: string[] = [];
+		for (const target of names) {
+			// Already taken down with an ancestor named earlier in this call: done, not unknown.
+			if (affected.includes(target)) {
+				results.push({ target, ok: true });
+				continue;
+			}
+			const check = this.authorize(by, target);
+			if (!check.ok) {
+				results.push({ target, ok: false, reason: check.reason });
+				continue;
+			}
+			results.push({ target, ok: true });
+			affected.push(...(await this.killSubtree(target)));
+		}
+		return { results, affected };
+	}
 
+	/** Kill `name` and its subtree (post-order), returning every name taken down. */
+	private async killSubtree(name: string): Promise<string[]> {
 		// Post-order: descendants precede their parent, so no record is closed while a live
 		// child could still be routing into it.
 		const subtree: AgentRecord[] = [];
@@ -397,7 +413,7 @@ export class Engine {
 			await this.closeRecord(r);
 			this.emit({ type: "kill", name: r.name, ts: Date.now() });
 		}
-		return { ok: true, killed: subtree.map((r) => r.name) };
+		return subtree.map((r) => r.name);
 	}
 
 	/**
@@ -429,14 +445,9 @@ export class Engine {
 		}
 	}
 
-	/** Kill all agents except 'main' (main's children, each with its subtree). Returns every name killed. */
-	async killAll(): Promise<string[]> {
-		const killed: string[] = [];
-		for (const rec of this.childrenOf("main")) {
-			const result = await this.kill("main", rec.name);
-			if (result.ok) killed.push(...result.killed);
-		}
-		return killed;
+	/** Kill all agents except 'main': main's children, each with its subtree. */
+	killAll(): Promise<ControlResult> {
+		return this.kill("main", this.childrenOf("main").map((rec) => rec.name));
 	}
 
 	/**

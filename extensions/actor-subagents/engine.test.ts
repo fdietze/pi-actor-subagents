@@ -320,8 +320,8 @@ test("kill awaits the agent's ordered runtime close, removes it, and emits a kil
 			lifecycle.push("closed");
 		},
 	});
-	const r = await e.kill("main", "a");
-	assert.equal(r.ok, true);
+	const r = await e.kill("main", ["a"]);
+	assert.deepEqual(r, { results: [{ target: "a", ok: true }], affected: ["a"] });
 	assert.deepEqual(lifecycle, ["closed"]);
 	assert.equal(e.has("a"), false);
 	assert.equal(e.events.at(-1)?.type, "kill");
@@ -345,9 +345,10 @@ test("kill cascades to the whole subtree, deepest first", async () => {
 	e.addAgent(withClose("grandchild", "child", 3));
 	e.addAgent(withClose("sibling", "main", 1)); // untouched: not in the subtree
 
-	const r = await e.kill("main", "parent");
-	assert.equal(r.ok, true);
-	assert.deepEqual((r as { killed: string[] }).killed, ["grandchild", "child", "parent"]);
+	// Naming a descendant of an earlier target too is done, not unknown.
+	const r = await e.kill("main", ["parent", "child"]);
+	assert.deepEqual(r.results, [{ target: "parent", ok: true }, { target: "child", ok: true }]);
+	assert.deepEqual(r.affected, ["grandchild", "child", "parent"]);
 	// Post-order: no record is closed while a live descendant could still route into it.
 	assert.deepEqual(closed, ["grandchild", "child", "parent"]);
 	assert.deepEqual(
@@ -363,12 +364,10 @@ test("kill cascades to the whole subtree, deepest first", async () => {
 test("kill refuses 'main' and unknown agents", async () => {
 	const e = new Engine(caps);
 	e.addAgent(mainRecord());
-	const u = await e.kill("main", "main");
-	assert.equal(u.ok, false);
-	assert.match((u as { reason: string }).reason, /main/);
-	const x = await e.kill("main", "ghost");
-	assert.equal(x.ok, false);
-	assert.match((x as { reason: string }).reason, /unknown/);
+	assert.deepEqual((await e.kill("main", ["main", "ghost"])).results, [
+		{ target: "main", ok: false, reason: "'main' is not in your subtree" },
+		{ target: "ghost", ok: false, reason: "unknown agent 'ghost'" },
+	]);
 	assert.equal(e.has("main"), true);
 });
 
@@ -377,8 +376,8 @@ test("killAll removes every agent except 'main' and returns their names", async 
 	e.addAgent(mainRecord());
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
-	const killed = await e.killAll();
-	assert.deepEqual(killed.sort(), ["a", "b"]);
+	const { affected } = await e.killAll();
+	assert.deepEqual(affected.sort(), ["a", "b"]);
 	assert.equal(e.has("main"), true);
 	assert.equal(e.list().length, 1);
 });
@@ -430,7 +429,7 @@ test("liveNames keeps history but drops killed agents, so the roster hides dead 
 	e.addAgent({ ...mainRecord(), name: "helper", depth: 1 });
 	await e.route("a", "helper", "hi");
 	await e.route("a", "main", "done");
-	await e.kill("main", "helper");
+	await e.kill("main", ["helper"]);
 	// Engine history is deliberately unchanged by the kill.
 	assert.equal(e.getMessageMatrix().a?.helper, 1);
 	assert.deepEqual([...e.liveNames()].sort(), ["a", "main"]);
@@ -458,7 +457,7 @@ test("re-spawning a killed name clears its incoming + outgoing edges and overwri
 	e.attach("w", { model: "test/m", handle: fakeHandle() });
 	await e.route("main", "w", "out-from-main"); // incoming edge main->w
 	await e.route("w", "a", "out-from-w"); // outgoing edge w->a
-	await e.kill("main", "w");
+	await e.kill("main", ["w"]);
 	// re-spawn 'w' under a different parent
 	e.reserve("w", "main");
 	const m = e.getMessageMatrix();
@@ -841,7 +840,7 @@ test("awaitReaction reports the agent as gone when it is killed mid-wait", async
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "doomed", depth: 1 });
 	const pending = e.awaitReaction("doomed", e.events.length, 60_000);
-	await e.kill("main", "doomed");
+	await e.kill("main", ["doomed"]);
 	assert.deepEqual(await withoutWaiting("awaitReaction", pending), { observed: "gone" });
 });
 
@@ -1003,7 +1002,7 @@ test("the spawn tree is derived from the live records", async () => {
 	const { e } = chain();
 	assert.deepEqual(e.getSpawnTree(), { a: "main", b: "a", c: "b" });
 	assert.equal(errorNotification({ name: "c", reason: "boom" }, e.getSpawnTree(), e.liveNames())?.to, "b");
-	await e.kill("main", "b");
+	await e.kill("main", ["b"]);
 	assert.deepEqual(e.getSpawnTree(), { a: "main" }, "killed agents leave no stale parent entries");
 });
 
@@ -1018,10 +1017,10 @@ test("control operations reach only the acting agent's strict descendants", asyn
 	assert.deepEqual(e.pausedAgents(), [], "a refused pause changes nothing");
 	assert.deepEqual(e.pause("a", ["c"]), { results: [{ target: "c", ok: true }], affected: ["c"] }, "a grandchild is in the subtree");
 	assert.deepEqual(e.resume("peer", ["c"]).results, [refused("c")]);
-	assert.deepEqual(await e.kill("b", "a"), { ok: false, reason: "'a' is not in your subtree" });
-	assert.deepEqual(await e.kill("peer", "main"), { ok: false, reason: "'main' is not in your subtree" });
-	assert.deepEqual(await e.kill("a", "b"), { ok: true, killed: ["c", "b"] });
-	assert.deepEqual(await e.kill("main", "peer"), { ok: true, killed: ["peer"] }, "main owns every agent");
+	assert.deepEqual((await e.kill("b", ["a"])).results, [refused("a")]);
+	assert.deepEqual((await e.kill("peer", ["main"])).results, [refused("main")]);
+	assert.deepEqual((await e.kill("a", ["b"])).affected, ["c", "b"]);
+	assert.deepEqual((await e.kill("main", ["peer"])).affected, ["peer"], "main owns every agent");
 });
 
 test("retune reaches the acting agent itself and its descendants", async () => {

@@ -4,7 +4,6 @@ import {
 	formatSnapshot,
 	normalizeTargets,
 	formatMulticastResult,
-	formatKillResult,
 	formatResumeResult,
 	formatControlResult,
 } from "./feed.ts";
@@ -209,28 +208,15 @@ test("formatResumeResult reports what changed, released and retriggered, then no
 	assert.equal(formatControlResult("pause", { results: [ok("a")], affected: ["a", "b"] }), "paused a, b");
 });
 
-test("formatKillResult names cascaded descendants, not just the named target", () => {
+test("formatControlResult reports a kill's whole cascade and its refusals", () => {
 	assert.equal(
-		formatKillResult([{ target: "parent", ok: true, killed: ["grandchild", "child", "parent"] }]),
-		"killed parent (+grandchild, child)",
+		formatControlResult("kill", {
+			results: [{ target: "parent", ok: true }, { target: "x", ok: false, reason: "'x' is not in your subtree" }],
+			affected: ["grandchild", "child", "parent"],
+		}),
+		"killed grandchild, child, parent · failed: x: 'x' is not in your subtree",
 	);
-	// A leaf kill stays plain: nothing extra came down with it.
-	assert.equal(formatKillResult([{ target: "leaf", ok: true, killed: ["leaf"] }]), "killed leaf");
 });
-
-test("formatKillResult: killed + failed split", () => {
-	assert.equal(formatKillResult([{ target: "a", ok: true }]), "killed a");
-	assert.equal(
-		formatKillResult([
-			{ target: "a", ok: true },
-			{ target: "main", ok: false, reason: "cannot kill 'main'" },
-		]),
-		"killed a · failed: main: cannot kill 'main'",
-	);
-	assert.equal(formatKillResult([]), "error: no targets");
-});
-
-// ── spawn-tree indent (one space per depth level; main is listed, so it sits at 0) ──
 
 test("formatSnapshot indents each agent by its spawn-tree depth", () => {
 	const out = formatSnapshot(

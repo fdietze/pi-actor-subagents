@@ -36,9 +36,7 @@ import {
 import { errorNotification } from "./error-notification.ts";
 import {
   formatControlResult,
-  formatKillResult,
   formatResumeResult,
-  type KillOutcome,
 } from "./feed.ts";
 import {
   formatContext,
@@ -164,8 +162,8 @@ const RESUME_NUDGE = (now: Date) => {
 //      a restore pauses main's direct children with the ordinary per-agent flag. The pause is
 //      derived (own flag or an ancestor's), resume returns the released/interrupted agents,
 //      Engine.status(rec) is the displayed status, and getSpawnTree() is derived from live
-//      records. pause/resume/kill/retune take the acting agent first and return per-target
-//      outcomes. A v25 instance would keep a swarm-wide pause this code can no longer lift.
+//      records. pause/resume/kill/retune take the acting agent first; pause/resume/kill take a
+//      names list and return per-target outcomes. A v25 instance would keep a swarm-wide pause this code can no longer lift.
 const ENGINE_KEY = "__subagentsEngine_v26";
 
 function getEngine(): Engine {
@@ -992,23 +990,15 @@ export default function subagents(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("subagents-kill", {
-    description: "Terminate agents by name (empty = all except 'main').",
+    description: "Terminate agents by name, each with its subtree (empty = all except 'main').",
     handler: async (args, ctx) => {
       const names = parseNames(args);
-      // Named kills report per target (each cascades to its subtree); without names the whole
-      // swarm goes down and killAll already returns the flat list of what it took.
-      const results: KillOutcome[] = names.length
-        ? await Promise.all(
-            names.map(async (target) => ({ target, ...(await engine.kill("main", target)) })),
-          )
-        : (await engine.killAll()).map((name) => ({ target: name, ok: true }));
+      const result = names.length ? await engine.kill("main", names) : await engine.killAll();
       persistRoster();
-      ctx.ui.notify(
-        results.length ? formatKillResult(results) : "No agents to kill.",
-        "info",
-      );
+      ctx.ui.notify(formatControlResult("kill", result), "info");
       updateStatus();
     },
   });
+
 
 }

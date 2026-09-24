@@ -79,7 +79,7 @@ export interface SpawnerDeps {
 	/** Resolve "provider/id" or undefined (=> inherit); undefined if unknown. */
 	resolveModel: (ref: string | undefined) => ResolvedModel | undefined;
 	/** Available models as "provider/id" (auth configured) — listed in the unknown-model error
-	 * so a bad overrideModel self-corrects in one bounce instead of hallucinating again. */
+	 * so a bad spawn `model` self-corrects in one bounce instead of hallucinating again. */
 	listAvailableModels?: () => string[];
 	/**
 	 * Create an isolated background agent session (SDK adapter in index.ts).

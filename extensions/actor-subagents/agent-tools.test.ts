@@ -92,6 +92,6 @@ test("control tools act as the calling agent: only its subtree obeys", async () 
 		textOf(await call("lead", "resume_subagents", {})),
 		"resumed helper · released 0 buffered messages · retriggered 0 interrupted agents",
 	);
-	assert.match(textOf(await call("peer", "kill_subagent", { name: ["helper"] })) ?? "", /failed: helper: 'helper' is not in your subtree/);
+	assert.match(textOf(await call("peer", "kill_subagents", { names: ["helper"] })) ?? "", /failed: helper: 'helper' is not in your subtree/);
 	assert.ok(engine.has("helper"));
 });

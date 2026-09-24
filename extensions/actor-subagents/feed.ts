@@ -104,15 +104,6 @@ export function normalizeTargets(to: string[]): string[] {
 	return out;
 }
 
-/** Per-target result of a batch kill (kill_subagent takes an array of names). */
-export interface KillOutcome {
-	target: string;
-	ok: boolean;
-	reason?: string;
-	/** Every name taken down for this target, including the target itself (kill cascades to the subtree). */
-	killed?: string[];
-}
-
 /**
  * Per-target result of a multicast send: the message's fate, plus — for a delivered one — what
  * the bounded wait observed of the receiver. The two axes stay separate all the way to the text.
@@ -186,22 +177,4 @@ export function formatResumeResult(result: EngineResumeResult): string {
 		`released ${result.bufferedMessages} buffered messages`,
 		`retriggered ${result.interrupted.length} interrupted ${noun}`,
 	]);
-}
-
-/** Summarizes a kill result compactly (for the tool response). */
-export function formatKillResult(results: KillOutcome[]): string {
-	if (results.length === 0) return "error: no targets";
-	// Name the cascaded descendants explicitly: silently killing agents the caller never
-	// named would be a surprise (The Map Is Not the Territory).
-	const killed = results
-		.filter((r) => r.ok)
-		.map((r) => {
-			const extra = (r.killed ?? []).filter((n) => n !== r.target);
-			return extra.length ? `${r.target} (+${extra.join(", ")})` : r.target;
-		});
-	const failed = results.filter((r) => !r.ok).map((r) => `${r.target}: ${r.reason}`);
-	const parts: string[] = [];
-	if (killed.length) parts.push(`killed ${killed.join(", ")}`);
-	if (failed.length) parts.push(`failed: ${failed.join("; ")}`);
-	return parts.join(" · ");
 }

@@ -34,7 +34,7 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 ## External interfaces
 
 - Pi package entry: `extensions/actor-subagents/index.ts`
-- Agent tools: `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `kill_subagent`, `subagent_history`, `set_status`, `resume_subagents`
+- Agent tools (`agent-tools.ts`, shared by every agent; 'main' skips `set_status`): `spawn_subagent`, `send_message`, `set_subagent_model`, `list_subagents`, `subagent_history`, `set_status`, `pause_subagents`, `resume_subagents`, `kill_subagents`
 - Commands: `/subagents`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`
 - Custom message type and details shape: `agent-message.ts`
 - Settings (caps and child capability policy): `<pi agent dir>/actor-subagents/settings.json`, the agent dir being the SDK's `getAgentDir()` (normally `~/.pi/agent`)
@@ -46,7 +46,7 @@ There are no open ports or separate services. The extension has the same process
 ## Source map
 
 - `index.ts`: pi integration, lifecycle, child construction, persistence orchestration, commands and UI wiring
-- `engine.ts`: actor registry, spawn tree, scheduling, routing, per-agent and swarm-wide pause, kill/retune state
+- `engine.ts`: actor registry, spawn tree, scheduling, routing, derived pause (`pausedBy`), the subtree authority rule (`authorize`), kill/retune state
 - `settings.ts`: pure parser for `settings.json` (caps + child extension policy) and the default caps
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
 - `spawner.ts`: child session lifecycle and event bridge
