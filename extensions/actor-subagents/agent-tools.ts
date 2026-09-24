@@ -19,7 +19,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { orderAgents } from "./agent-order.ts";
-import type { Engine, EngineResumeResult } from "./engine.ts";
+import type { EngineResumeResult } from "./control-result.ts";
+import type { Engine } from "./engine.ts";
 import {
   formatControlResult,
   formatMulticastResult,

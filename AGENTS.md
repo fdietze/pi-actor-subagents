@@ -27,7 +27,7 @@ Every tool result carries the wall-clock times it started and finished, so agent
 
 An agent entering the error state — a thrown exception or a logical run the SDK settled after exhausting retries — emits one `error` event per failed run, and `index.ts` delivers a notification to that agent's direct parent as ordinary peer traffic, so a parent parked on a reply that can no longer come is woken. `error-notification.ts` decides who is told.
 
-Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. The panel renders a child's transcript with pi's own chat components, so `AgentView` (in `engine.ts`, implemented by `spawner.ts`) also exposes the child session's `getToolDefinition`: a tool call is drawn by the tool's own renderer instead of as a bare name. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
+Agent and session events update `engine.ts`. The panel and feed project that state through pure formatting modules. The panel renders a child's transcript with pi's own chat components, so `AgentView` (in `agent-record.ts`, implemented by `spawner.ts`) also exposes the child session's `getToolDefinition`: a tool call is drawn by the tool's own renderer instead of as a bare name. Agent-to-agent traffic uses the structured custom message defined by `agent-message.ts`; `index.ts` owns delivery to the current foreground session.
 
 When the main session is file-backed, `persistence.ts` stores `roster.json` and child JSONL sessions under `<main-session-dir>/subagents/<main-session-id>/`. Restore validates the roster through `persistence-logic.ts` and reconnects each child session. These paths and formats are compatibility contracts.
 
@@ -47,6 +47,7 @@ There are no open ports or separate services. The extension has the same process
 
 - `index.ts`: pi integration, lifecycle, child construction, persistence orchestration, commands and UI wiring
 - `engine.ts`: actor registry, spawn tree, scheduling, routing, derived pause (`pausedBy`), the subtree authority rule (`authorize`), kill/retune state
+- `agent-record.ts`, `agent-event.ts`, `control-result.ts`: the engine's record, event and control-result types
 - `settings.ts`: pure parser for `settings.json` (caps + child extension policy) and the default caps
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
 - `spawner.ts`: child session lifecycle and event bridge

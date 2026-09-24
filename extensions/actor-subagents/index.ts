@@ -27,11 +27,9 @@ import { renderAgentMessage } from "./agent-message-renderer.ts";
 import { orderAgents } from "./agent-order.ts";
 import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
-import {
-  type AgentHandle,
-  Engine,
-  type EngineResumeResult,
-} from "./engine.ts";
+import type { AgentHandle } from "./agent-record.ts";
+import type { EngineResumeResult } from "./control-result.ts";
+import { Engine } from "./engine.ts";
 import { errorNotification } from "./error-notification.ts";
 import {
   formatControlResult,

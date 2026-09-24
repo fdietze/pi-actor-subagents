@@ -8,7 +8,8 @@ import {
 	formatControlResult,
 } from "./feed.ts";
 import { type AgentStatus, agentStatus } from "./agent-status.ts";
-import type { AgentRecord, Reaction } from "./engine.ts";
+import type { AgentRecord } from "./agent-record.ts";
+import type { Reaction } from "./engine.ts";
 import type { OrderedAgent } from "./agent-order.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({

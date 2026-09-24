@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Engine, type AgentHandle } from "./engine.ts";
+import type { AgentHandle } from "./agent-record.ts";
+import { Engine } from "./engine.ts";
 import { makeAgentTools } from "./agent-tools.ts";
 
 const handle = (): AgentHandle => ({ deliver: async () => {}, abort: async () => {} });

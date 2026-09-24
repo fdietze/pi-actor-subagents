@@ -5,7 +5,8 @@
  */
 import type { RoutedAgentMessage } from "./agent-message.ts";
 import type { StopReason } from "./agent-status.ts";
-import type { AgentHandle, AgentRecord, AgentView, Engine } from "./engine.ts";
+import type { AgentHandle, AgentRecord, AgentView } from "./agent-record.ts";
+import type { Engine } from "./engine.ts";
 import { formatReceiverStatus } from "./feed.ts";
 import { unknownModelMessage } from "./resolve-model.ts";
 import { formatModelThinking, type ThinkingLevel } from "./thinking-level.ts";

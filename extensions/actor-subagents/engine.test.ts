@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRoutedAgentMessage, type RoutedAgentMessage } from "./agent-message.ts";
 import { agentStatus, formatStatus } from "./agent-status.ts";
-import { Engine, type AgentHandle, type EngineResumeResult } from "./engine.ts";
+import type { AgentHandle } from "./agent-record.ts";
+import type { EngineResumeResult } from "./control-result.ts";
+import { Engine } from "./engine.ts";
 import { errorNotification } from "./error-notification.ts";
 import { formatSendTargets } from "./panel-logic.ts";
 

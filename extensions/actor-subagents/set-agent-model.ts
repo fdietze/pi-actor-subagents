@@ -9,7 +9,8 @@
  * SDK-free: model resolution is injected, which keeps the policy unit-testable without a live
  * pi session (Functional Core / Imperative Shell).
  */
-import type { Engine, ModelChange } from "./engine.ts";
+import type { ModelChange } from "./agent-record.ts";
+import type { Engine } from "./engine.ts";
 import { formatModelThinking, type ThinkingLevel } from "./thinking-level.ts";
 
 export interface SetAgentModelSpec {

@@ -4,7 +4,9 @@
  */
 import type { OrderedAgent } from "./agent-order.ts";
 import { type AgentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, ControlResult, EngineResumeResult, Reaction } from "./engine.ts";
+import type { AgentRecord } from "./agent-record.ts";
+import type { ControlResult, EngineResumeResult } from "./control-result.ts";
+import type { Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
