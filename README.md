@@ -15,10 +15,10 @@ Every agent receives `spawn_subagent`, `send_message`, `set_subagent_model`, `li
 The interactive UI shows a compact roster and provides:
 
 - `/subagents` — open the swarm panel; its input box messages the selected agent as you
-- `/subagents-pause` and `/subagents-resume` — stop or continue agents by name, each with its subtree (no name = all)
+- `/subagents-pause` and `/subagents-resume` — stop or continue agents by name, each with its subtree (no name = `main`'s direct children; a pause another agent set on its own child stays)
 - `/subagents-kill` — terminate agents by name, each with its subtree (no name = all)
 
-Saved swarms live beside the main pi session under `subagents/<main-session-id>/` and are restored when that session returns.
+Saved swarms live beside the main pi session under `subagents/<main-session-id>/` and are restored, paused, when that session returns.
 
 ## Settings
 
