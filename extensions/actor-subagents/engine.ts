@@ -141,6 +141,22 @@ export type AgentEvent =
 
 export type CheckResult = { ok: true } | { ok: false; reason: string };
 
+/**
+ * One target's outcome of a control operation (pause, resume, kill). `reason` explains a refusal,
+ * or — on success — a state the caller would otherwise misread (e.g. still held by an ancestor).
+ */
+export interface TargetOutcome {
+	target: string;
+	ok: boolean;
+	reason?: string;
+}
+
+/** A control operation's per-target outcomes plus the agents whose state actually changed. */
+export interface ControlResult {
+	results: TargetOutcome[];
+	affected: string[];
+}
+
 /** Kill reports every name it took down, because killing a parent takes its subtree with it. */
 export type KillResult = { ok: true; killed: string[] } | { ok: false; reason: string };
 
@@ -178,10 +194,11 @@ export type Reaction =
 	/** The agent no longer exists (killed while we waited); it has no status to report. */
 	| { observed: "gone" };
 
-/** Work released by resume, counted without claiming asynchronous delivery completed. */
-export interface EngineResumeResult {
-	/** Agents that went from paused to running. */
-	resumed: string[];
+/**
+ * Work released by resume, counted without claiming asynchronous delivery completed. `affected`
+ * lists the agents that went from paused to running.
+ */
+export interface EngineResumeResult extends ControlResult {
 	/** The resumed agents that had been paused mid-turn: their work needs re-triggering. */
 	interrupted: string[];
 	bufferedMessages: number;
@@ -348,19 +365,18 @@ export class Engine {
 		}
 	}
 
-	/** Terminate an agent and await its runtime teardown. 'main' is off-limits. */
 	/**
-	 * Kill an agent AND its whole subtree, deepest first.
+	 * `by` kills an agent in its subtree AND that agent's whole subtree, deepest first, awaiting
+	 * each runtime teardown.
 	 *
 	 * The spawn tree is the ownership structure: a child exists to serve its spawner, and its
 	 * only upward channel is that spawner. Orphaning it leaves an agent nobody reads, still
 	 * holding one of the `maxAgents` slots and still able to run turns — a leak with no
 	 * reader (Second-Order Thinking). Killing individual leaves stays possible: name them.
 	 */
-	async kill(name: string): Promise<KillResult> {
-		if (name === "main") return { ok: false, reason: "cannot kill 'main'" };
-		const rec = this.agents.get(name);
-		if (!rec) return { ok: false, reason: `unknown agent '${name}'` };
+	async kill(by: string, name: string): Promise<KillResult> {
+		const check = this.authorize(by, name);
+		if (!check.ok) return check;
 
 		// Post-order: descendants precede their parent, so no record is closed while a live
 		// child could still be routing into it.
@@ -391,11 +407,17 @@ export class Engine {
 	 * the old model, the next one uses the new. Refusing while busy would push callers into the
 	 * polling loop the prompts forbid, and aborting the turn would burn work.
 	 */
-	async retune(name: string, change: { model?: ModelChange; thinkingLevel?: ThinkingLevel }): Promise<RetuneResult> {
+	async retune(
+		by: string,
+		name: string,
+		change: { model?: ModelChange; thinkingLevel?: ThinkingLevel },
+	): Promise<RetuneResult> {
 		if (name === "main") return { ok: false, reason: "cannot retune 'main' (use pi's own model controls)" };
+		// An agent may tune itself: escalating its own effort is its call, unlike stopping itself.
+		const check = this.authorize(by, name, "self");
+		if (!check.ok) return check;
 		const rec = this.agents.get(name);
-		if (!rec) return { ok: false, reason: `unknown agent '${name}'` };
-		if (!rec.reconfigure) return { ok: false, reason: `agent '${name}' is still spawning` };
+		if (!rec?.reconfigure) return { ok: false, reason: `agent '${name}' is still spawning` };
 		try {
 			const tuning = await rec.reconfigure(change);
 			if (tuning.model) rec.model = tuning.model;
@@ -407,12 +429,12 @@ export class Engine {
 		}
 	}
 
-	/** Kill all agents except 'main'. Returns the names of those killed. */
+	/** Kill all agents except 'main' (main's children, each with its subtree). Returns every name killed. */
 	async killAll(): Promise<string[]> {
 		const killed: string[] = [];
-		for (const name of [...this.agents.keys()]) {
-			if (name === "main") continue;
-			if ((await this.kill(name)).ok) killed.push(name);
+		for (const rec of this.childrenOf("main")) {
+			const result = await this.kill("main", rec.name);
+			if (result.ok) killed.push(...result.killed);
 		}
 		return killed;
 	}
@@ -427,12 +449,55 @@ export class Engine {
 		await Promise.all(records.map((rec) => this.closeRecord(rec)));
 	}
 
-	/** Background agents, optionally narrowed to the given names (unknown names are skipped). */
-	private background(names?: string[]): AgentRecord[] {
-		const all = [...this.agents.values()].filter((rec) => rec.name !== "main");
-		if (!names || names.length === 0) return all;
-		const wanted = new Set(names);
-		return all.filter((rec) => wanted.has(rec.name));
+	/** Every agent except 'main'. */
+	private background(): AgentRecord[] {
+		return [...this.agents.values()].filter((rec) => rec.name !== "main");
+	}
+
+	/** The agents `parent` spawned. */
+	private childrenOf(parent: string): AgentRecord[] {
+		return this.background().filter((rec) => rec.spawnedBy === parent);
+	}
+
+	/**
+	 * The authority rule, "who spawns, owns": `by` controls exactly its strict descendants, and
+	 * 'main', the root, therefore every other agent. With "self" `by` may also act on itself. One
+	 * check for every control operation keeps the rule in one place (DRY); `by` always comes from
+	 * the acting agent's tool closure, never from tool arguments, so it cannot be spoofed.
+	 *
+	 * An unknown name is reported as such first: observation is unrestricted, so this reveals
+	 * nothing list_subagents would not.
+	 */
+	private authorize(by: string, name: string, self?: "self"): CheckResult {
+		const rec = this.agents.get(name);
+		if (!rec) return { ok: false, reason: `unknown agent '${name}'` };
+		if (self && name === by) return { ok: true };
+		// Walk up the ancestors; it ends at 'main' because every spawnedBy is live or 'main'.
+		// 'main' itself is nobody's descendant ('main' is its own spawnedBy).
+		let parent = name === "main" ? undefined : rec.spawnedBy;
+		while (parent !== undefined) {
+			if (parent === by) return { ok: true };
+			parent = parent === "main" ? undefined : this.agents.get(parent)?.spawnedBy;
+		}
+		return { ok: false, reason: `'${name}' is not in your subtree` };
+	}
+
+	/**
+	 * Resolve the targets of a pause or resume: the named agents, or `by`'s direct children when
+	 * none are named — their subtrees follow through the derived pause, and a flag set by a lower
+	 * owner is left alone. Each name gets its outcome; only the authorized ones are returned to act on.
+	 */
+	private controlTargets(by: string, names?: string[]): { results: TargetOutcome[]; recs: AgentRecord[] } {
+		const targets = names && names.length > 0 ? names : this.childrenOf(by).map((rec) => rec.name);
+		const results: TargetOutcome[] = [];
+		const recs: AgentRecord[] = [];
+		for (const target of targets) {
+			const check = this.authorize(by, target);
+			results.push(check.ok ? { target, ok: true } : { target, ok: false, reason: check.reason });
+			const rec = this.agents.get(target);
+			if (check.ok && rec) recs.push(rec);
+		}
+		return { results, recs };
 	}
 
 	/** Names of the paused background agents (effective state, see pausedBy). */
@@ -539,44 +604,53 @@ export class Engine {
 	}
 
 	/**
-	 * Pause agents — all background agents when no names are given, otherwise the named ones — by
-	 * setting their own flag. Returns every agent that went from running to paused, which is the
-	 * named agents plus their subtrees, so the caller can abort exactly those turns. Whoever of them
-	 * is mid-turn is marked `pausedMidTurn` so resume re-triggers that interrupted work.
+	 * `by` pauses agents in its subtree — the named ones, or its direct children when none are
+	 * named — by setting their own flag. `affected` lists every agent that went from running to
+	 * paused, which is the targets plus their subtrees, so the caller can abort exactly those turns.
+	 * Whoever of them is mid-turn is marked `pausedMidTurn` so resume re-triggers that work.
+	 * Pausing an already paused agent succeeds and changes nothing.
 	 *
 	 * Nothing flagged means no event: a mistyped or already-paused name must not show up in the
 	 * feed as a pause that happened.
 	 */
-	pause(names?: string[]): string[] {
+	pause(by: string, names?: string[]): ControlResult {
+		const { results, recs } = this.controlTargets(by, names);
 		const before = this.pausedSet();
 		const flagged: string[] = [];
-		for (const rec of this.background(names)) {
+		for (const rec of recs) {
 			if (rec.paused) continue;
 			rec.paused = true;
 			flagged.push(rec.name);
 		}
-		if (flagged.length === 0) return [];
+		if (flagged.length === 0) return { results, affected: [] };
 		const newlyPaused = this.background().filter((rec) => !before.has(rec.name) && this.isAgentPaused(rec));
 		// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
 		for (const rec of newlyPaused) if (rec.activity !== undefined) rec.pausedMidTurn = true;
 		this.emit({ type: "pause", names: flagged, ts: Date.now() });
-		return newlyPaused.map((rec) => rec.name);
+		return { results, affected: newlyPaused.map((rec) => rec.name) };
 	}
 
 	/**
-	 * Resume agents — all background agents when no names are given, otherwise the named ones — by
-	 * clearing only their own flag. Every agent that thereby went from paused to running gets its
-	 * buffered inbox released as one ordered batch; an agent still held by another flag (its own or
-	 * an ancestor's) stays paused and keeps its inbox. `interrupted` lists the released agents that
-	 * were paused mid-turn, for the caller to re-trigger.
+	 * `by` resumes agents in its subtree — the named ones, or its direct children when none are
+	 * named — by clearing only their own flag. Every agent that thereby went from paused to running
+	 * gets its buffered inbox released as one ordered batch; an agent still held by another flag
+	 * (its own or an ancestor's) stays paused and keeps its inbox, and a target held by an ancestor
+	 * says so. `interrupted` lists the released agents that were paused mid-turn, for the caller to
+	 * re-trigger.
 	 *
-	 * Nothing cleared means no event and an empty result.
+	 * Nothing cleared means no event.
 	 */
-	resume(names?: string[]): EngineResumeResult {
+	resume(by: string, names?: string[]): EngineResumeResult {
+		const { results, recs } = this.controlTargets(by, names);
 		const before = this.pausedSet();
-		const cleared = this.background(names).filter((rec) => rec.paused === true);
-		if (cleared.length === 0) return { resumed: [], interrupted: [], bufferedMessages: 0 };
+		const cleared = recs.filter((rec) => rec.paused === true);
 		for (const rec of cleared) rec.paused = false;
+		for (const result of results) {
+			const rec = this.agents.get(result.target);
+			const holder = result.ok && rec ? this.pausedBy(rec) : undefined;
+			if (holder) result.reason = `still paused by '${holder}'`;
+		}
+		if (cleared.length === 0) return { results, affected: [], interrupted: [], bufferedMessages: 0 };
 
 		const released = this.background().filter((rec) => before.has(rec.name) && !this.isAgentPaused(rec));
 		const interrupted: string[] = [];
@@ -597,7 +671,7 @@ export class Engine {
 		}
 
 		this.emit({ type: "resume", names: cleared.map((rec) => rec.name), ts: Date.now() });
-		return { resumed: released.map((rec) => rec.name), interrupted, bufferedMessages };
+		return { results, affected: released.map((rec) => rec.name), interrupted, bufferedMessages };
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {

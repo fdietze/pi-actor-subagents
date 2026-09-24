@@ -1,10 +1,11 @@
 /**
- * The agent-facing toolset: the six tools every agent (foreground 'main' and every background
- * agent) drives the swarm with, plus the tool-call preview renderer they share.
+ * The agent-facing toolset every agent (foreground 'main' and every background agent) drives
+ * the swarm with, plus the tool-call preview renderer they share.
  *
  * `selfName` is bound at construction, so a tool call always acts as the agent that owns the
- * tool — an agent cannot spoof another sender. index.ts registers these for 'main' and passes
- * them to each child session as customTools.
+ * tool — an agent cannot spoof another sender, and the control tools (pause, resume, kill,
+ * retune) pass it to the engine as the acting agent whose subtree bounds what it may control.
+ * index.ts registers these for 'main' and passes them to each child session as customTools.
  *
  * The protocol rules in the spawn_subagent/send_message descriptions restate, in condensed form,
  * what agent-system-prompt.ts states at boot time. Change them together.
@@ -18,10 +19,12 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { orderAgents } from "./agent-order.ts";
-import type { Engine } from "./engine.ts";
+import type { ControlResult, Engine, EngineResumeResult } from "./engine.ts";
 import {
+  formatControlResult,
   formatKillResult,
   formatMulticastResult,
+  formatResumeResult,
   formatSnapshot,
   type MulticastRouteOutcome,
   normalizeTargets,
@@ -88,6 +91,10 @@ export interface AgentToolsDeps {
   spawnAgent: Spawner["spawnAgent"];
   /** Change a running agent's model/effort (set-agent-model.ts owns the rules). */
   setAgentModel: AgentModelSetter;
+  /** Pause agents as `by` and abort the turns that stopped (the shell owns the aborts). */
+  pauseAgents: (by: string, names?: string[]) => ControlResult;
+  /** Resume agents as `by` and re-trigger the interrupted ones (the shell owns the nudges). */
+  resumeAgents: (by: string, names?: string[]) => EngineResumeResult;
   /** Persist the membership roster after a spawn or kill. */
   persistRoster: () => void;
   /** Refresh the status widget after a change an agent made. */
@@ -105,6 +112,8 @@ export function makeAgentTools(
     engine,
     spawnAgent,
     setAgentModel,
+    pauseAgents,
+    resumeAgents,
     persistRoster,
     updateStatus,
     getHideThinking,
@@ -242,7 +251,8 @@ export function makeAgentTools(
         ),
       description:
         "Change a running agent's model and/or thinking effort, keeping its transcript and its " +
-        "place in the swarm — no respawn. Works on any agent INCLUDING YOURSELF, so use it to " +
+        "place in the swarm — no respawn. Works on yourself and on the agents in your subtree (those " +
+        "you spawned, and theirs), so use it to " +
         "escalate work that turned out harder than expected (stronger model or higher effort) or to " +
         "downshift cheap grinding. Pass at least one of model/thinkingLevel. Takes effect from the " +
         "target's next turn; a turn already running may finish on the old model. 'main' is the " +
@@ -263,7 +273,7 @@ export function makeAgentTools(
         ),
       }),
       execute: async (_id, args) => {
-        const res = await setAgentModel({
+        const res = await setAgentModel(selfName, {
           name: args.name,
           model: args.model,
           thinkingLevel: args.thinkingLevel,
@@ -307,7 +317,7 @@ export function makeAgentTools(
           context?.expanded ?? false,
         ),
       description:
-        "Terminate agents by name array. Killing an agent also kills the agents it spawned (its whole subtree); the result names every agent taken down. 'main' cannot be killed.",
+        "Terminate agents in your subtree (those you spawned, and theirs) by name array. Killing an agent also kills the agents it spawned (its whole subtree); the result names every agent taken down.",
       parameters: Type.Object({
         name: Type.Array(Type.String(), {
           description: "List of agent names to terminate",
@@ -317,7 +327,7 @@ export function makeAgentTools(
         const targets = normalizeTargets(args.name);
         const results = [];
         for (const target of targets) {
-          const result = await engine.kill(target);
+          const result = await engine.kill(selfName, target);
           results.push(
             result.ok
               ? { target, ok: true, killed: result.killed }
@@ -327,6 +337,66 @@ export function makeAgentTools(
         persistRoster();
         return {
           content: [{ type: "text", text: formatKillResult(results) }],
+          details: {},
+        };
+      },
+    }),
+    defineTool({
+      name: "pause_subagents",
+      label: "Pause Subagents",
+      renderCall: (args, theme, context) =>
+        renderToolArgs(
+          "pause_subagents",
+          args as Record<string, unknown>,
+          theme as RenderTheme,
+          context?.expanded ?? false,
+        ),
+      description:
+        "Pause agents in your subtree (those you spawned, and theirs): their running turns stop and " +
+        "new messages buffer until resumed; a paused agent's whole subtree is paused with it. " +
+        "To correct a subagent that went off track: pause it, send the correction with " +
+        "send_message, then resume it with resume_subagents.",
+      parameters: Type.Object({
+        names: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Agents in your subtree to pause; omit to pause all your direct children (their subtrees follow).",
+          }),
+        ),
+      }),
+      execute: async (_id, args) => {
+        const result = pauseAgents(selfName, normalizeTargets(args.names ?? []));
+        return {
+          content: [{ type: "text", text: formatControlResult("pause", result) }],
+          details: {},
+        };
+      },
+    }),
+    defineTool({
+      name: "resume_subagents",
+      label: "Resume Subagents",
+      renderCall: (args, theme, context) =>
+        renderToolArgs(
+          "resume_subagents",
+          args as Record<string, unknown>,
+          theme as RenderTheme,
+          context?.expanded ?? false,
+        ),
+      description:
+        "Resume paused agents in your subtree: release their buffered messages as one batch and " +
+        "retrigger their interrupted work. An agent stays paused while an agent above it is paused.",
+      parameters: Type.Object({
+        names: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Agents in your subtree to resume; omit to resume all your direct children (their subtrees follow).",
+          }),
+        ),
+      }),
+      execute: async (_id, args) => {
+        const result = resumeAgents(selfName, normalizeTargets(args.names ?? []));
+        return {
+          content: [{ type: "text", text: formatResumeResult(result) }],
           details: {},
         };
       },

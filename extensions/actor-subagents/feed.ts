@@ -4,7 +4,7 @@
  */
 import type { OrderedAgent } from "./agent-order.ts";
 import { type AgentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, Reaction } from "./engine.ts";
+import type { AgentRecord, ControlResult, EngineResumeResult, Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
@@ -156,27 +156,36 @@ export function formatMulticastResult(results: MulticastRouteOutcome[]): string 
 	return parts.join(" · ");
 }
 
-export interface ResumeSummary {
-	/** Agents that went from paused to running. */
-	resumed: string[];
-	bufferedMessages: number;
-	retriggered: number;
-}
+const PAST_TENSE = { pause: "paused", resume: "resumed", kill: "killed" } as const;
 
 /**
- * Human-readable projection of the structured resume result.
- *
- * A resume that set no agent running released no inbox and re-triggered nobody. Reporting those
- * zeros would claim work that did not happen, so that case gets its own short line.
+ * One text shape for every control operation: what actually changed, then per-target notes
+ * (a success the caller would otherwise misread) and refusals. `details` describe the change and
+ * are shown only when something changed, so zeros never claim work that did not happen.
  */
-export function formatResumeSummary(summary: ResumeSummary): string {
-	if (summary.resumed.length === 0) return "no agent resumed (none was paused, or a paused ancestor still holds it)";
-	const noun = summary.retriggered === 1 ? "agent" : "agents";
-	return [
-		`resumed ${summary.resumed.join(", ")}`,
-		`released ${summary.bufferedMessages} buffered messages`,
-		`retriggered ${summary.retriggered} interrupted ${noun}`,
-	].join(" · ");
+export function formatControlResult(
+	action: keyof typeof PAST_TENSE,
+	result: ControlResult,
+	details: string[] = [],
+): string {
+	if (result.results.length === 0) return `no agents to ${action}`;
+	const parts = result.affected.length
+		? [`${PAST_TENSE[action]} ${result.affected.join(", ")}`, ...details]
+		: [`nothing ${PAST_TENSE[action]}`];
+	const notes = result.results.filter((r) => r.ok && r.reason).map((r) => `${r.target}: ${r.reason}`);
+	const failed = result.results.filter((r) => !r.ok).map((r) => `${r.target}: ${r.reason}`);
+	if (notes.length) parts.push(notes.join("; "));
+	if (failed.length) parts.push(`failed: ${failed.join("; ")}`);
+	return parts.join(" · ");
+}
+
+/** The resume text: the shared control shape plus what the resume released and re-triggered. */
+export function formatResumeResult(result: EngineResumeResult): string {
+	const noun = result.interrupted.length === 1 ? "agent" : "agents";
+	return formatControlResult("resume", result, [
+		`released ${result.bufferedMessages} buffered messages`,
+		`retriggered ${result.interrupted.length} interrupted ${noun}`,
+	]);
 }
 
 /** Summarizes a kill result compactly (for the tool response). */

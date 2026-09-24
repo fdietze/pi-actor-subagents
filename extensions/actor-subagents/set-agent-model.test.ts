@@ -40,7 +40,7 @@ function setterFor(engine: Engine, persisted: string[] = []) {
 test("a model change is applied, persisted and reported with the effective level", async () => {
 	const { engine, changes } = engineWithChild();
 	const persisted: string[] = [];
-	const result = await setterFor(engine, persisted)({ name: "w", model: "anthropic/opus", thinkingLevel: "high" });
+	const result = await setterFor(engine, persisted)("main", { name: "w", model: "anthropic/opus", thinkingLevel: "high" });
 	assert.equal(result.ok, true);
 	assert.equal(result.msg, "retuned 'w' to anthropic/opus@high");
 	assert.equal(engine.get("w")?.model, "anthropic/opus");
@@ -50,7 +50,7 @@ test("a model change is applied, persisted and reported with the effective level
 
 test("thinking level alone leaves the model untouched", async () => {
 	const { engine } = engineWithChild();
-	const result = await setterFor(engine)({ name: "w", thinkingLevel: "xhigh" });
+	const result = await setterFor(engine)("main", { name: "w", thinkingLevel: "xhigh" });
 	assert.equal(result.ok, true);
 	assert.equal(engine.get("w")?.model, "anthropic/sonnet");
 	assert.equal(engine.get("w")?.thinkingLevel, "xhigh");
@@ -58,7 +58,7 @@ test("thinking level alone leaves the model untouched", async () => {
 
 test("an unknown model is refused with the available list, and nothing is applied", async () => {
 	const { engine, changes } = engineWithChild();
-	const result = await setterFor(engine)({ name: "w", model: "bogus/model" });
+	const result = await setterFor(engine)("main", { name: "w", model: "bogus/model" });
 	assert.equal(result.ok, false);
 	assert.match(result.msg, /unknown model 'bogus\/model'; available: anthropic\/opus/);
 	assert.equal(changes.length, 0);
@@ -67,7 +67,7 @@ test("an unknown model is refused with the available list, and nothing is applie
 
 test("a call that changes nothing is an error, not a silent success", async () => {
 	const { engine } = engineWithChild();
-	const result = await setterFor(engine)({ name: "w" });
+	const result = await setterFor(engine)("main", { name: "w" });
 	assert.equal(result.ok, false);
 	assert.match(result.msg, /nothing to change/);
 });
@@ -75,6 +75,6 @@ test("a call that changes nothing is an error, not a silent success", async () =
 test("engine refusals (unknown agent, main) surface verbatim", async () => {
 	const { engine } = engineWithChild();
 	const set = setterFor(engine);
-	assert.match((await set({ name: "ghost", thinkingLevel: "high" })).msg, /unknown agent 'ghost'/);
-	assert.match((await set({ name: "main", thinkingLevel: "high" })).msg, /cannot retune 'main'/);
+	assert.match((await set("main", { name: "ghost", thinkingLevel: "high" })).msg, /unknown agent 'ghost'/);
+	assert.match((await set("main", { name: "main", thinkingLevel: "high" })).msg, /cannot retune 'main'/);
 });

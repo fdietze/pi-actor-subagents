@@ -5,7 +5,8 @@ import {
 	normalizeTargets,
 	formatMulticastResult,
 	formatKillResult,
-	formatResumeSummary,
+	formatResumeResult,
+	formatControlResult,
 } from "./feed.ts";
 import { type AgentStatus, agentStatus } from "./agent-status.ts";
 import type { AgentRecord, Reaction } from "./engine.ts";
@@ -188,20 +189,24 @@ test("formatMulticastResult reports each receiver state a delivered message can 
 	assert.equal(sentTo({ observed: "gone" }), "sent to a (gone)");
 });
 
-test("formatResumeSummary reports released buffer and retriggers, or why nothing happened", () => {
+test("formatResumeResult reports what changed, released and retriggered, then notes and refusals", () => {
+	const ok = (target: string, reason?: string) => ({ target, ok: true, ...(reason ? { reason } : {}) });
 	assert.equal(
-		formatResumeSummary({ resumed: ["a", "b"], bufferedMessages: 2, retriggered: 1 }),
+		formatResumeResult({ results: [ok("a")], affected: ["a", "b"], interrupted: ["b"], bufferedMessages: 2 }),
 		"resumed a, b · released 2 buffered messages · retriggered 1 interrupted agent",
 	);
 	// Nothing set running: reporting zeros would claim work that did not happen.
 	assert.equal(
-		formatResumeSummary({ resumed: [], bufferedMessages: 0, retriggered: 0 }),
-		"no agent resumed (none was paused, or a paused ancestor still holds it)",
+		formatResumeResult({
+			results: [ok("b", "still paused by 'a'"), { target: "x", ok: false, reason: "'x' is not in your subtree" }],
+			affected: [],
+			interrupted: [],
+			bufferedMessages: 0,
+		}),
+		"nothing resumed · b: still paused by 'a' · failed: x: 'x' is not in your subtree",
 	);
-	assert.equal(
-		formatResumeSummary({ resumed: ["a"], bufferedMessages: 0, retriggered: 0 }),
-		"resumed a · released 0 buffered messages · retriggered 0 interrupted agents",
-	);
+	assert.equal(formatControlResult("pause", { results: [], affected: [] }), "no agents to pause");
+	assert.equal(formatControlResult("pause", { results: [ok("a")], affected: ["a", "b"] }), "paused a, b");
 });
 
 test("formatKillResult names cascaded descendants, not just the named target", () => {

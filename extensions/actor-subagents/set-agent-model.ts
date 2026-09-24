@@ -32,7 +32,8 @@ export interface SetAgentModelDeps {
 
 /** Build the retune entry point. The result message is meant to be shown verbatim. */
 export function createAgentModelSetter(deps: SetAgentModelDeps) {
-	return async (spec: SetAgentModelSpec): Promise<{ ok: boolean; msg: string }> => {
+	// `by` is the acting agent (the panel acts as 'main'); the engine decides whether it may.
+	return async (by: string, spec: SetAgentModelSpec): Promise<{ ok: boolean; msg: string }> => {
 		// Nothing to apply is a caller mistake, not a no-op success: saying so beats silently
 		// reporting the unchanged tuning as if something had happened.
 		if (!spec.model && !spec.thinkingLevel) {
@@ -43,7 +44,7 @@ export function createAgentModelSetter(deps: SetAgentModelDeps) {
 			model = deps.resolveModel(spec.model);
 			if (!model) return { ok: false, msg: `error: ${deps.unknownModel(spec.model)}` };
 		}
-		const result = await deps.engine.retune(spec.name, { model, thinkingLevel: spec.thinkingLevel });
+		const result = await deps.engine.retune(by, spec.name, { model, thinkingLevel: spec.thinkingLevel });
 		if (!result.ok) return { ok: false, msg: `error: ${result.reason}` };
 		deps.persistRoster();
 		const rec = deps.engine.get(spec.name);

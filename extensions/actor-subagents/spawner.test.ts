@@ -128,7 +128,7 @@ test("smoke: spawn -> deliver -> reply -> pause buffers", async () => {
 	assert.equal(echo?.aborted ?? 0, 0);
 
 	// a paused agent's turn is refused at its start, and its incoming mail buffers
-	engine.pause();
+	engine.pause("main");
 	echo?.emit("turn_start");
 	assert.ok((echo?.aborted ?? 0) >= 1);
 	const blocked = await engine.route("main", "echo", "again");
@@ -165,7 +165,7 @@ test("spawn reports an initial message as buffered when the new agent is paused"
 	});
 	// The pause lands while the session is being created, before the initial message is routed.
 	const created = spawner.spawnAgent({ name: "waiting", systemPrompt: "wait", message: "start later" }, "main");
-	engine.pause(["waiting"]);
+	engine.pause("main", ["waiting"]);
 
 	const started = Date.now();
 	const result = await created;
@@ -485,7 +485,7 @@ test("kill closes a child session exactly once in abortBash-abort-detach-shutdow
 	assert.ok(close);
 	await Promise.all([close(), close()]);
 
-	const result = await engine.kill("child");
+	const result = await engine.kill("main", "child");
 
 	assert.equal(result.ok, true);
 	assert.deepEqual(session.lifecycle, ["abortBash", "abort", "detach", "shutdown", "dispose"]);
@@ -506,7 +506,7 @@ test("a child killed while session creation is pending closes the orphan runtime
 	});
 	const spawning = spawner.spawnAgent({ name: "child", systemPrompt: "r" }, "main");
 	assert.equal(engine.get("child")?.pending, true);
-	await engine.kill("child");
+	await engine.kill("main", "child");
 
 	finishCreation({ session });
 	const result = await spawning;
@@ -532,7 +532,7 @@ test("a spawned agent can be retuned in place, and the roster adopts the session
 	await spawner.spawnAgent({ name: "echo", systemPrompt: "reply" }, "main");
 
 	const opus = { opus: true };
-	const result = await engine.retune("echo", { model: { display: "test/opus", model: opus }, thinkingLevel: "low" });
+	const result = await engine.retune("main", "echo", { model: { display: "test/opus", model: opus }, thinkingLevel: "low" });
 	assert.equal(result.ok, true);
 	// The change reached the live session (no respawn: the same FakeSession instance is retuned).
 	assert.deepEqual(sessions.get("echo")?.models, [opus]);
@@ -557,7 +557,7 @@ test("a model-only retune keeps the agent's current thinking level", async () =>
 	});
 	await spawner.spawnAgent({ name: "echo", systemPrompt: "reply" }, "main");
 
-	const result = await engine.retune("echo", { model: { display: "test/opus", model: {} } });
+	const result = await engine.retune("main", "echo", { model: { display: "test/opus", model: {} } });
 	assert.equal(result.ok, true);
 	assert.equal(session.thinkingLevel, "low");
 	assert.equal(engine.get("echo")?.thinkingLevel, "low");
