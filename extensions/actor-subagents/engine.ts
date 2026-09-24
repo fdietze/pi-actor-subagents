@@ -8,10 +8,12 @@ import {
 	type RoutedAgentMessage,
 } from "./agent-message.ts";
 import type { AgentEvent } from "./agent-event.ts";
+import { authorize } from "./authorize.ts";
 import type { AgentHandle, AgentRecord, AgentTuning, AgentView, ModelChange } from "./agent-record.ts";
 import { type AgentActivity, type AgentStatus, agentStatus, type StopReason } from "./agent-status.ts";
 import type { CheckResult, ControlResult, EngineResumeResult, TargetOutcome } from "./control-result.ts";
 import type { Caps } from "./settings.ts";
+import { childrenOf, nearest, pausedBy, subtreePostOrder } from "./spawn-tree.ts";
 import type { ThinkingLevel } from "./thinking-level.ts";
 
 export type RetuneResult = { ok: true; tuning: AgentTuning } | { ok: false; reason: string };
@@ -233,7 +235,7 @@ export class Engine {
 				results.push({ target, ok: true });
 				continue;
 			}
-			const check = this.authorize(by, target);
+			const check = authorize(this.agents, by, target);
 			if (!check.ok) {
 				results.push({ target, ok: false, reason: check.reason });
 				continue;
@@ -246,18 +248,7 @@ export class Engine {
 
 	/** Kill `name` and its subtree (post-order), returning every name taken down. */
 	private async killSubtree(name: string): Promise<string[]> {
-		// Post-order: descendants precede their parent, so no record is closed while a live
-		// child could still be routing into it.
-		const subtree: AgentRecord[] = [];
-		const collect = (parent: string) => {
-			for (const candidate of this.agents.values()) {
-				// 'main' is its own spawner; guarding against that keeps the walk from looping.
-				if (candidate.name !== "main" && candidate.spawnedBy === parent) collect(candidate.name);
-			}
-			const r = this.agents.get(parent);
-			if (r) subtree.push(r);
-		};
-		collect(name);
+		const subtree = subtreePostOrder(this.agents, name);
 
 		// Inversion: remove first so no new message can enter a runtime while it closes.
 		for (const r of subtree) this.agents.delete(r.name);
@@ -282,7 +273,7 @@ export class Engine {
 	): Promise<RetuneResult> {
 		if (name === "main") return { ok: false, reason: "cannot retune 'main' (use pi's own model controls)" };
 		// An agent may tune itself: escalating its own effort is its call, unlike stopping itself.
-		const check = this.authorize(by, name, "self");
+		const check = authorize(this.agents, by, name, "self");
 		if (!check.ok) return check;
 		const rec = this.agents.get(name);
 		if (!rec?.reconfigure) return { ok: false, reason: `agent '${name}' is still spawning` };
@@ -299,7 +290,7 @@ export class Engine {
 
 	/** Kill all agents except 'main': main's children, each with its subtree. */
 	killAll(): Promise<ControlResult> {
-		return this.kill("main", this.childrenOf("main").map((rec) => rec.name));
+		return this.kill("main", childrenOf(this.agents, "main").map((rec) => rec.name));
 	}
 
 	/**
@@ -317,45 +308,17 @@ export class Engine {
 		return [...this.agents.values()].filter((rec) => rec.name !== "main");
 	}
 
-	/** The agents `parent` spawned. */
-	private childrenOf(parent: string): AgentRecord[] {
-		return this.background().filter((rec) => rec.spawnedBy === parent);
-	}
-
-	/**
-	 * The authority rule, "who spawns, owns": `by` controls exactly its strict descendants, and
-	 * 'main', the root, therefore every other agent. With "self" `by` may also act on itself. One
-	 * check for every control operation keeps the rule in one place (DRY); `by` always comes from
-	 * the acting agent's tool closure, never from tool arguments, so it cannot be spoofed.
-	 *
-	 * An unknown name is reported as such first: observation is unrestricted, so this reveals
-	 * nothing list_subagents would not.
-	 */
-	private authorize(by: string, name: string, self?: "self"): CheckResult {
-		const rec = this.agents.get(name);
-		if (!rec) return { ok: false, reason: `unknown agent '${name}'` };
-		if (self && name === by) return { ok: true };
-		// Walk up the ancestors; it ends at 'main' because every spawnedBy is live or 'main'.
-		// 'main' itself is nobody's descendant ('main' is its own spawnedBy).
-		let parent = name === "main" ? undefined : rec.spawnedBy;
-		while (parent !== undefined) {
-			if (parent === by) return { ok: true };
-			parent = parent === "main" ? undefined : this.agents.get(parent)?.spawnedBy;
-		}
-		return { ok: false, reason: `'${name}' is not in your subtree` };
-	}
-
 	/**
 	 * Resolve the targets of a pause or resume: the named agents, or `by`'s direct children when
 	 * none are named — their subtrees follow through the derived pause, and a flag set by a lower
 	 * owner is left alone. Each name gets its outcome; only the authorized ones are returned to act on.
 	 */
 	private controlTargets(by: string, names?: string[]): { results: TargetOutcome[]; recs: AgentRecord[] } {
-		const targets = names && names.length > 0 ? names : this.childrenOf(by).map((rec) => rec.name);
+		const targets = names && names.length > 0 ? names : childrenOf(this.agents, by).map((rec) => rec.name);
 		const results: TargetOutcome[] = [];
 		const recs: AgentRecord[] = [];
 		for (const target of targets) {
-			const check = this.authorize(by, target);
+			const check = authorize(this.agents, by, target);
 			results.push(check.ok ? { target, ok: true } : { target, ok: false, reason: check.reason });
 			const rec = this.agents.get(target);
 			if (check.ok && rec) recs.push(rec);
@@ -370,33 +333,9 @@ export class Engine {
 			.map((rec) => rec.name);
 	}
 
-	/**
-	 * The single pause decision: the nearest agent — this one or an ancestor — whose own `paused`
-	 * flag holds `rec`, or undefined when it runs. Deriving the state instead of copying flags down
-	 * the tree keeps one source of truth: a subtree spawned or restored under a paused agent is
-	 * held without extra bookkeeping, and a flag set by a lower owner survives an ancestor's resume
-	 * (Correctness by Construction).
-	 *
-	 */
-	private pausedBy(rec: AgentRecord): string | undefined {
-		return this.nearest(rec, (cur) => cur.paused === true)?.name;
-	}
-
-	/**
-	 * The nearest of `rec` and its ancestors (below 'main') that matches. The walk terminates
-	 * because every `spawnedBy` names a live agent or 'main' and parents are registered before
-	 * their children, so the parent links cannot form a cycle.
-	 */
-	private nearest(rec: AgentRecord, match: (cur: AgentRecord) => boolean): AgentRecord | undefined {
-		for (let cur: AgentRecord | undefined = rec; cur && cur.name !== "main"; cur = this.agents.get(cur.spawnedBy)) {
-			if (match(cur)) return cur;
-		}
-		return undefined;
-	}
-
 	/** Is this agent stopped? Blocks its turns and buffers its incoming messages. */
 	private isAgentPaused(rec: AgentRecord): boolean {
-		return this.pausedBy(rec) !== undefined;
+		return pausedBy(this.agents, rec) !== undefined;
 	}
 
 	/** The agent's status with its effective pause state folded in; the only status to display. */
@@ -533,7 +472,7 @@ export class Engine {
 		for (const rec of cleared) rec.paused = false;
 		for (const result of results) {
 			const rec = this.agents.get(result.target);
-			const holder = result.ok && rec ? this.pausedBy(rec) : undefined;
+			const holder = result.ok && rec ? pausedBy(this.agents, rec) : undefined;
 			if (holder) result.reason = `still paused by '${holder}'`;
 		}
 		if (cleared.length === 0) return { results, affected: [], interrupted: [], bufferedMessages: 0 };
@@ -566,7 +505,7 @@ export class Engine {
 	 */
 	private pendingAborts(targets: ReadonlySet<string>): Promise<void>[] {
 		const wouldRun = (rec: AgentRecord) =>
-			this.isAgentPaused(rec) && !this.nearest(rec, (cur) => cur.paused === true && !targets.has(cur.name));
+			this.isAgentPaused(rec) && !nearest(this.agents, rec, (cur) => cur.paused === true && !targets.has(cur.name));
 		return [...this.aborting].flatMap(([name, done]) => {
 			const rec = this.agents.get(name);
 			return rec && wouldRun(rec) ? [done] : [];

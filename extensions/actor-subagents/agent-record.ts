@@ -100,7 +100,7 @@ export interface AgentRecord {
 	/**
 	 * This agent's OWN pause flag, set by pause() and cleared by resume(). Whether the agent is
 	 * stopped is derived: it is paused while this flag is set on it or on any ancestor (see
-	 * Engine.pausedBy). Read the effective state through the engine, never from this field alone.
+	 * pausedBy in spawn-tree.ts). Read the effective state through the engine, never from this field alone.
 	 */
 	paused?: boolean;
 	/** Reservation intermediate state: name taken, session still being created. */
