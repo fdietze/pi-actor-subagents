@@ -99,15 +99,14 @@ export interface AgentRecord {
 	/** Terminal reason of the last finished turn; drives the idle-time status (error/truncated). Cleared when a new turn starts. */
 	stopReason?: StopReason;
 	/**
-	 * Set when the swarm was paused while this agent was mid-turn. Marks it for re-triggering
-	 * on resume; survives the agent_end of an allowed-to-complete turn (endTurn must NOT clear
-	 * it). Cleared by resume().
+	 * Set when this agent was paused mid-turn (or restored from a transcript that ended mid-turn).
+	 * Marks it for re-triggering on resume; survives the agent_end of an allowed-to-complete turn
+	 * (endTurn must NOT clear it). Cleared by resume().
 	 */
 	pausedMidTurn?: boolean;
 	/**
-	 * Manual pause of THIS agent (pause()/`/subagents-pause <names>`): its turns are aborted and
-	 * its incoming messages buffer. Separate from the swarm-wide restored pause, so pausing one
-	 * agent cannot silently stop the others.
+	 * Pause flag of THIS agent, set by pause() — by a command, a tool, or a restore. While set, its
+	 * turns are aborted and its incoming messages buffer in `pausedInbox`.
 	 */
 	paused?: boolean;
 	/** Reservation intermediate state: name taken, session still being created. */
@@ -122,7 +121,7 @@ export interface AgentRecord {
 	 * which is exactly what makes those two cases unretunable without a separate flag.
 	 */
 	reconfigure?: (change: { model?: ModelChange; thinkingLevel?: ThinkingLevel }) => Promise<AgentTuning>;
-	/** Messages buffered while the swarm is paused. Released on resume. */
+	/** Messages buffered while this agent is paused. Released on resume. */
 	pausedInbox?: RoutedAgentMessage[];
 }
 
@@ -132,18 +131,12 @@ export type AgentEvent =
 	// target session: the feed must not claim delivery for something that has not moved yet.
 	| { type: "route"; from: string; to: string; preview: string; buffered: boolean; ts: number }
 	| { type: "turn"; name: string; ts: number }
-	// `names` is empty when the whole swarm is affected and lists the agents otherwise, so the
-	// feed never claims a swarm-wide stop for a per-agent pause (The Map Is Not the Territory).
-	| { type: "pause"; reason: PauseReason; names: string[]; ts: number }
+	// `names` lists exactly the agents whose pause flag changed, so the feed never claims a stop
+	// that did not happen (The Map Is Not the Territory).
+	| { type: "pause"; names: string[]; ts: number }
 	| { type: "resume"; names: string[]; ts: number }
 	| { type: "kill"; name: string; ts: number }
 	| { type: "error"; name: string; reason: string; ts: number };
-
-/**
- * Why agents are paused: "manual" is the human's per-agent /subagents-pause, "restored" is how a
- * rebuilt swarm comes up after a restart — stopped until someone resumes it.
- */
-export type PauseReason = "manual" | "restored";
 
 export type CheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -157,7 +150,7 @@ export type KillResult = { ok: true; killed: string[] } | { ok: false; reason: s
  */
 export type RouteResult =
 	| { outcome: "delivered" }
-	| { outcome: "buffered"; reason: PauseReason }
+	| { outcome: "buffered" }
 	| { outcome: "failed"; reason: string };
 
 /**
@@ -188,8 +181,6 @@ export type Reaction =
 export interface EngineResumeResult {
 	wasPaused: boolean;
 	bufferedMessages: number;
-	/** A named resume was rejected because the swarm-wide restored pause holds everything. */
-	blockedByRestoredPause?: boolean;
 }
 
 /**
@@ -211,8 +202,6 @@ export class Engine {
 	// Graph tracking (in-memory, survives /reload via the singleton, resets on pi restart).
 	private readonly messageEdges = new Map<string, Map<string, number>>(); // from -> (to -> count)
 	private readonly spawnParent = new Map<string, string>(); // child -> parent (main = root, no entry)
-	// Swarm-wide pause: a restored swarm comes up stopped. Manual pauses live per agent.
-	private restoredPause = false;
 	private readonly caps: Caps;
 
 	// Note: no TS parameter properties — Node's strip-only mode (node --test on .ts)
@@ -444,45 +433,19 @@ export class Engine {
 		return all.filter((rec) => wanted.has(rec.name));
 	}
 
-	/**
-	 * Is the SWARM stopped? True only for the swarm-wide cause (a restored session), which stops
-	 * every agent including ones spawned later. A manually paused agent is reported by
-	 * pausedAgents() instead — conflating the two made the UI claim a stopped swarm while the
-	 * other agents kept running and receiving mail.
-	 */
-	isPaused(): boolean {
-		return this.restoredPause;
-	}
-
-	/** Names of the manually paused background agents (the per-agent counterpart of isPaused). */
+	/** Names of the paused background agents. */
 	pausedAgents(): string[] {
 		return this.background()
-			.filter((rec) => rec.paused === true)
+			.filter((rec) => this.isAgentPaused(rec))
 			.map((rec) => rec.name);
 	}
 
-	/** Is this agent stopped? Either cause blocks its turns and buffers its incoming messages. */
+	/** Is this agent stopped? Blocks its turns and buffers its incoming messages. */
 	private isAgentPaused(rec: AgentRecord): boolean {
-		// Single source of truth: "paused" is exactly "there is a pause cause".
-		return this.pauseCauseOf(rec) !== undefined;
+		return rec.paused === true;
 	}
 
-	/**
-	 * Why this agent is stopped, or undefined when it is live. The swarm-wide cause wins over a
-	 * manual pause because only a full resume can lift it — reporting "manual" then would point
-	 * the caller at a resume that does nothing.
-	 */
-	private pauseCauseOf(rec: AgentRecord): PauseReason | undefined {
-		if (this.restoredPause) return "restored";
-		return rec.paused === true ? "manual" : undefined;
-	}
-
-	/**
-	 * The agent's status, with the swarm-wide pause folded in. `agentStatus` is a per-record pure
-	 * function and deliberately cannot see `restoredPause`, which lives on the engine; folding it in
-	 * here keeps the swarm-level knowledge in the one place that owns it instead of adding a
-	 * swarm-wide variant to the shared status vocabulary.
-	 */
+	/** The agent's status as the engine sees it, with its pause state folded in. */
 	statusOf(name: string): AgentStatus | undefined {
 		const rec = this.agents.get(name);
 		if (!rec) return undefined;
@@ -548,18 +511,16 @@ export class Engine {
 	}
 
 	/**
-	 * Manually pause agents — all background agents when no names are given, otherwise exactly
-	 * the named ones. Returns the agents that were not already paused, so the caller can abort
-	 * their running turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers
-	 * that interrupted work; idle agents are left alone. Pausing everything covers the agents
-	 * that exist NOW (a still-pending reservation included); an agent spawned afterwards starts
-	 * live, since only 'main' can spawn while the others are paused.
+	 * Pause agents — all background agents when no names are given, otherwise exactly the named
+	 * ones. Returns the agents that were not already paused, so the caller can abort their running
+	 * turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers that interrupted
+	 * work; idle agents are left alone. Pausing everything covers the agents that exist NOW (a
+	 * still-pending reservation included); an agent spawned afterwards starts live.
 	 *
 	 * Nothing paused means no event: a mistyped or already-paused name must not show up in the
 	 * feed as a pause that happened.
 	 */
 	pause(names?: string[]): string[] {
-		const swarmWide = !names || names.length === 0;
 		const newlyPaused: string[] = [];
 		for (const rec of this.background(names)) {
 			if (rec.paused) continue;
@@ -568,48 +529,19 @@ export class Engine {
 			// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
 			if (rec.activity !== undefined) rec.pausedMidTurn = true;
 		}
-		if (newlyPaused.length > 0)
-			this.emit({ type: "pause", reason: "manual", names: swarmWide ? [] : newlyPaused, ts: Date.now() });
+		if (newlyPaused.length > 0) this.emit({ type: "pause", names: newlyPaused, ts: Date.now() });
 		return newlyPaused;
 	}
 
 	/**
-	 * Stop the whole swarm because it was just rebuilt from a persisted session: the restored
-	 * agents' work is resumed deliberately, not by the restore itself. Kept separate from pause()
-	 * because only a full resume lifts it and it holds agents spawned afterwards too.
-	 */
-	pauseRestored(): void {
-		this.restoredPause = true;
-		for (const rec of this.background()) {
-			if (rec.activity !== undefined) rec.pausedMidTurn = true;
-		}
-		this.emit({ type: "pause", reason: "restored", names: [], ts: Date.now() });
-	}
-
-	/**
-	 * Resume agents. Without names this is the "resume everything" verb: it clears every pause and
-	 * releases every buffered inbox. It is a no-op when nothing is paused.
-	 *
-	 * With names it clears only those agents' manual pause. While the restored pause holds it does
-	 * nothing at all and says so: releasing one agent's inbox then would hand it work that
-	 * recordTurnStart immediately aborts, leaving the message unprocessed in its transcript with
-	 * nobody re-triggering it.
+	 * Resume agents — all paused background agents when no names are given, otherwise the named
+	 * ones. It is a no-op when none of them is paused.
 	 */
 	resume(names?: string[]): EngineResumeResult {
-		const swarmWide = !names || names.length === 0;
-		if (swarmWide) {
-			if (!this.restoredPause && this.pausedAgents().length === 0)
-				return { wasPaused: false, bufferedMessages: 0 };
-			this.restoredPause = false;
-		} else {
-			if (this.restoredPause)
-				return { wasPaused: false, bufferedMessages: 0, blockedByRestoredPause: true };
-			if (!this.background(names).some((rec) => rec.paused === true))
-				return { wasPaused: false, bufferedMessages: 0 };
-		}
+		const released = this.background(names).filter((rec) => rec.paused === true);
+		if (released.length === 0) return { wasPaused: false, bufferedMessages: 0 };
 
 		let bufferedMessages = 0;
-		const released = this.background(names);
 		for (const rec of released) {
 			rec.paused = false;
 			rec.pausedMidTurn = false;
@@ -625,7 +557,7 @@ export class Engine {
 			}
 		}
 
-		this.emit({ type: "resume", names: swarmWide ? [] : released.map((rec) => rec.name), ts: Date.now() });
+		this.emit({ type: "resume", names: released.map((rec) => rec.name), ts: Date.now() });
 		return { wasPaused: true, bufferedMessages };
 	}
 
@@ -635,16 +567,16 @@ export class Engine {
 		const message = createRoutedAgentMessage(from, content);
 		// One tail for both outcomes: a paused target parks the message, a live one takes it.
 		// Everything after that (edge count, activity, feed event) is identical, so it is written once.
-		// The cause is read ONCE, before the delivery await, and the reported outcome comes from that
-		// same decision: a pause landing while `deliver` is in flight must not turn a message the
+		// The pause state is read ONCE, before the delivery await, and the reported outcome comes from
+		// that same decision: a pause landing while `deliver` is in flight must not turn a message the
 		// session already has into a "buffered" report (the map has to match what actually happened).
-		const cause = this.pauseCauseOf(target);
-		if (cause) (target.pausedInbox ??= []).push(message);
+		const paused = this.isAgentPaused(target);
+		if (paused) (target.pausedInbox ??= []).push(message);
 		else await target.handle.deliver(message);
 		target.lastActivity = Date.now();
 		this.countEdge(from, to);
-		this.emit({ type: "route", from, to, preview: previewOf(content), buffered: cause !== undefined, ts: Date.now() });
-		return cause ? { outcome: "buffered", reason: cause } : { outcome: "delivered" };
+		this.emit({ type: "route", from, to, preview: previewOf(content), buffered: paused, ts: Date.now() });
+		return paused ? { outcome: "buffered" } : { outcome: "delivered" };
 	}
 
 	/**
@@ -711,7 +643,7 @@ export class Engine {
 	 */
 	recordTurnStart(name: string): { abort: boolean; reason?: string } {
 		const rec = this.agents.get(name);
-		if (this.restoredPause || rec?.paused) return { abort: true, reason: "agents paused" };
+		if (rec && this.isAgentPaused(rec)) return { abort: true, reason: "agents paused" };
 		if (rec) {
 			rec.turns++;
 			rec.lastActivity = Date.now();

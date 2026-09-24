@@ -253,21 +253,11 @@ test("formatRoster: model id and effective thinking level are shown together", (
 	assert.match(row, /gpt-5\.6-sol@xhigh/);
 });
 
-test("swarmStateLine: paused buffering vs live with activity count", () => {
-	assert.match(swarmStateLine(true, 3, 0), /PAUSED/);
-	assert.match(swarmStateLine(true, 3, 0), /messages buffer/);
-	assert.match(swarmStateLine(true, 3, 0), /subagents-resume/);
-	assert.match(swarmStateLine(false, 2, 0), /live · 2 working/);
-	assert.match(swarmStateLine(false, 0, 0), /live · idle/);
-	assert.doesNotMatch(swarmStateLine(false, 0, 0), /running/);
-});
-
-test("swarmStateLine: individually paused agents are counted, not reported as a stopped swarm", () => {
-	const line = swarmStateLine(false, 2, 1);
-	assert.match(line, /live/);
-	assert.match(line, /2 working/);
-	assert.match(line, /1 paused/);
-	assert.doesNotMatch(line, /PAUSED/);
+test("swarmStateLine: activity count plus paused agents", () => {
+	assert.match(swarmStateLine(2, 0), /live · 2 working/);
+	assert.match(swarmStateLine(0, 0), /live · idle/);
+	assert.doesNotMatch(swarmStateLine(0, 0), /running|paused/);
+	assert.match(swarmStateLine(2, 1), /2 working · 1 paused/);
 });
 
 

@@ -132,7 +132,7 @@ test("smoke: spawn -> deliver -> reply -> pause buffers", async () => {
 	echo?.emit("turn_start");
 	assert.ok((echo?.aborted ?? 0) >= 1);
 	const blocked = await engine.route("main", "echo", "again");
-	assert.deepEqual(blocked, { outcome: "buffered", reason: "manual" });
+	assert.deepEqual(blocked, { outcome: "buffered" });
 });
 
 test("spawn confirms the new agent reacted and reports its observed status", async () => {
@@ -154,7 +154,7 @@ test("spawn confirms the new agent reacted and reports its observed status", asy
 	assert.match(result.msg, /sent initial message \(thinking\)/);
 });
 
-test("spawn reports an initial message as buffered while the swarm-wide pause holds", async () => {
+test("spawn reports an initial message as buffered when the new agent is paused", async () => {
 	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
 	withMain(engine, []);
 	const session = new FakeSession();
@@ -163,20 +163,17 @@ test("spawn reports an initial message as buffered while the swarm-wide pause ho
 		resolveModel: () => ({ provider: "test", id: "m", model: {} }),
 		createSession: async () => ({ session }),
 	});
-	// A restored swarm blocks every agent, including ones spawned afterwards. A manual pause names
-	// existing agents instead, so it deliberately does not cover new ones.
-	engine.pauseRestored();
+	// The pause lands while the session is being created, before the initial message is routed.
+	const created = spawner.spawnAgent({ name: "waiting", systemPrompt: "wait", message: "start later" }, "main");
+	engine.pause(["waiting"]);
 
 	const started = Date.now();
-	const result = await spawner.spawnAgent(
-		{ name: "waiting", systemPrompt: "wait", message: "start later" },
-		"main",
-	);
+	const result = await created;
 
 	assert.equal(result.ok, true);
 	// A parked message can trigger no turn, so this path must not spend the confirmation window.
 	assert.ok(Date.now() - started < 1000);
-	assert.match(result.msg, /buffered initial message \(agents paused: restored\)/);
+	assert.match(result.msg, /buffered initial message \(paused\)/);
 	assert.doesNotMatch(result.msg, /sent initial message/);
 	assert.deepEqual(session.delivered, []);
 	assert.deepEqual(engine.get("waiting")?.pausedInbox, [createRoutedAgentMessage("main", "start later")]);

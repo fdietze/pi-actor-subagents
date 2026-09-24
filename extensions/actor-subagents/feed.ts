@@ -4,7 +4,7 @@
  */
 import type { OrderedAgent } from "./agent-order.ts";
 import { agentStatus, formatStatus } from "./agent-status.ts";
-import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
+import type { AgentRecord, Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
 
@@ -38,7 +38,6 @@ function relTo(a: AgentRecord, viewer: string, viewerParent: string | undefined)
 export function formatSnapshot(
 	ordered: OrderedAgent<AgentRecord>[],
 	viewer: string,
-	paused: boolean = false,
 	now: number = Date.now(),
 ): string {
 	if (ordered.length === 0) return "no agents";
@@ -85,10 +84,7 @@ export function formatSnapshot(
 			`${model}  ${origin}`
 		);
 	});
-	const scheduler = paused
-		? "agents (PAUSED — messages are buffering; /subagents-resume to continue):"
-		: "agents:";
-	return [scheduler, ...rows].join("\n");
+	return ["agents:", ...rows].join("\n");
 }
 
 /** Normalizes the target list: trims, drops empties, dedupes. */
@@ -120,7 +116,7 @@ export interface KillOutcome {
  */
 export type MulticastRouteOutcome =
 	| { target: string; outcome: "delivered"; reaction: Reaction }
-	| { target: string; outcome: "buffered"; reason: PauseReason }
+	| { target: string; outcome: "buffered" }
 	| { target: string; outcome: "failed"; reason: string };
 
 /**
@@ -136,12 +132,6 @@ export function formatReceiverStatus(reaction: Reaction): string {
 	return reaction.observed === "unmoved" && stillIdle ? `${label} (no reaction)` : label;
 }
 
-/** Why a message is parked, in the sender's terms: what would have to happen to release it. */
-const BUFFERED_CAUSE: Record<PauseReason, string> = {
-	manual: "paused",
-	restored: "paused after restore",
-};
-
 /**
  * Summarizes delivered, paused-buffered, and failed routes without conflating them, and reports
  * the receiver's state per target — state only, no advice on what the sender should do about it.
@@ -153,7 +143,7 @@ export function formatMulticastResult(results: MulticastRouteOutcome[]): string 
 	const failed: string[] = [];
 	for (const result of results) {
 		if (result.outcome === "delivered") delivered.push(`${result.target} (${formatReceiverStatus(result.reaction)})`);
-		else if (result.outcome === "buffered") buffered.push(`${result.target} (${BUFFERED_CAUSE[result.reason]})`);
+		else if (result.outcome === "buffered") buffered.push(`${result.target} (paused)`);
 		else failed.push(`${result.target}: ${result.reason}`);
 	}
 	const parts: string[] = [];
@@ -167,8 +157,6 @@ export interface ResumeSummary {
 	wasPaused: boolean;
 	bufferedMessages: number;
 	retriggered: number;
-	/** A named resume hit the swarm-wide restored pause, which only a full resume can lift. */
-	blockedByRestoredPause?: boolean;
 }
 
 /**
@@ -179,8 +167,6 @@ export interface ResumeSummary {
  * gets its own short line.
  */
 export function formatResumeSummary(summary: ResumeSummary): string {
-	if (summary.blockedByRestoredPause)
-		return "swarm is paused after restore · /subagents-resume without names to continue";
 	if (!summary.wasPaused) return "agents already live · nothing to resume";
 	const noun = summary.retriggered === 1 ? "agent" : "agents";
 	return [

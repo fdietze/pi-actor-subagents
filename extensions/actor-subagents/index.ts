@@ -50,6 +50,7 @@ import {
   danglingToolResultIds,
   deriveStatus,
   type RawMessage,
+  restoredPlacement,
   sessionSpecFromRoster,
 } from "./persistence-logic.ts";
 import { readRoster, subagentsDir, writeRoster } from "./persistence.ts";
@@ -156,7 +157,10 @@ const RESUME_NUDGE = (now: Date) => {
 // v25: child lifecycle wiring finalizes a logical run on agent_settled, not each retry's agent_end.
 //      Existing sessions retain their subscribed closure across /reload, so a v24 engine must be
 //      shut down rather than keep emitting duplicate retry notifications.
-const ENGINE_KEY = "__subagentsEngine_v25";
+// v26: one kind of pause — restoredPause, pauseRestored(), isPaused() and PauseReason are gone;
+//      a restore pauses main's direct children with the ordinary per-agent flag. A v25 instance
+//      would keep a swarm-wide pause this code can no longer lift.
+const ENGINE_KEY = "__subagentsEngine_v26";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -414,17 +418,8 @@ export default function subagents(pi: ExtensionAPI) {
       const running = background.filter(
         (o) => agentStatus(o.agent).kind === "working",
       ).length;
-      const stateLine = swarmStateLine(
-        engine.isPaused(),
-        running,
-        engine.pausedAgents().length,
-      );
-      const pauseLine = engine.isPaused()
-        ? theme.bg(
-            "toolPendingBg",
-            truncateToWidth(stateLine.padEnd(width), width),
-          )
-        : theme.bg("selectedBg", truncateToWidth(stateLine, width));
+      const stateLine = swarmStateLine(running, engine.pausedAgents().length);
+      const pauseLine = theme.bg("selectedBg", truncateToWidth(stateLine, width));
       // Same header the /subagents panel shows, so the swarm's size and activity stay visible at
       // a glance — not only inside the panel.
       const header = theme.fg(
@@ -700,8 +695,9 @@ export default function subagents(pi: ExtensionAPI) {
   };
 
   // Cold-start rebuild of a persisted swarm AS PAUSED: reopen each agent file, reconcile any
-  // crash damage, derive idle-vs-mid-turn from the transcript tail, register paused. The
-  // existing resume_subagents()/`/subagents-resume` then re-triggers exactly the interrupted agents.
+  // crash damage, derive idle-vs-mid-turn from the transcript tail, register, then pause main's
+  // direct children. The existing resume_subagents()/`/subagents-resume` then re-triggers exactly
+  // the interrupted agents.
   const restoreSwarm = async (): Promise<void> => {
     if (!subDir) return;
     // Skip if the swarm is already populated (/reload) or already restored this session.
@@ -711,20 +707,20 @@ export default function subagents(pi: ExtensionAPI) {
     done.add(subDir);
     const roster = readRoster(subDir);
     if (!roster.length) return;
-    let restored = 0;
     for (const entry of roster) {
       if (!fs.existsSync(entry.sessionFile)) continue; // file gone -> skip
       const resolved = resolveModel(entry.model);
       if (!resolved) continue; // model no longer available -> skip
+      // Placed before the session is built, so its preamble names the adopting parent too.
+      const placement = restoredPlacement(entry.spawnedBy, engine.get(entry.spawnedBy)?.depth);
       try {
         const { session, sessionFile } = await createSession(
-          sessionSpecFromRoster(entry, resolved.model),
+          sessionSpecFromRoster({ ...entry, ...placement }, resolved.model),
           entry.sessionFile,
         );
         restoreAgent({
           name: entry.name,
-          spawnedBy: entry.spawnedBy,
-          depth: entry.depth,
+          ...placement,
           model: `${resolved.provider}/${resolved.id}`,
           systemPrompt: entry.systemPrompt,
           sessionFile: sessionFile ?? entry.sessionFile,
@@ -732,19 +728,22 @@ export default function subagents(pi: ExtensionAPI) {
           pausedMidTurn:
             deriveStatus(session.messages as RawMessage[]) === "pausedMidTurn",
         });
-        restored++;
       } catch {
         /* skip an unrestorable agent */
       }
     }
-    // Present the restored swarm as paused: one resume_subagents()/`/subagents-resume` reactivates it.
-    if (restored > 0) engine.pauseRestored();
+    // Present the restored swarm as paused: one resume_subagents()/`/subagents-resume` reactivates
+    // it. The guard matters: pause() with no names would pause everything, not nothing.
+    const roots = engine
+      .list()
+      .filter((a) => a.name !== "main" && a.spawnedBy === "main")
+      .map((a) => a.name);
+    if (roots.length > 0) engine.pause(roots);
   };
 
   // Shared by /subagents-resume and the resume_subagents tool: unpause the named agents (all of
   // them when no names are given), release their buffered messages and re-trigger only the
-  // interrupted ones. Nothing is re-triggered when the resume did not happen (already live, or a
-  // named resume held back by the swarm-wide restored pause).
+  // interrupted ones. Nothing is re-triggered when the resume did not happen (already live).
   const resumeAgents = (names?: string[]): ResumeSummary => {
     const wanted = names && names.length > 0 ? new Set(names) : undefined;
     const interrupted = engine
@@ -916,9 +915,8 @@ export default function subagents(pi: ExtensionAPI) {
     label: "Resume Subagents",
     description:
       "Resume PAUSED agents: release their buffered messages and retrigger their interrupted work. " +
-      "Without names it resumes every agent, including a swarm that came up paused after a " +
-      "restore; with names it only lifts those agents' manual pause. Does nothing for agents that " +
-      "are already live.",
+      "Without names it resumes every paused agent (a restored swarm comes up paused); with names " +
+      "only those. Does nothing for agents that are already live.",
     parameters: Type.Object({
       names: Type.Optional(
         Type.Array(Type.String(), {
@@ -1023,7 +1021,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.registerCommand("subagents-resume", {
     description:
-      "Resume agents by name (empty = all, including a swarm paused after restore): " +
+      "Resume agents by name (empty = all): " +
       "release buffered messages and retrigger interrupted work. No effect on agents that are " +
       "already live.",
     handler: async (args, ctx) => {

@@ -361,7 +361,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 				// actually started on its task, without waiting for it to finish.
 				const reaction = await engine.awaitReaction(spec.name, sinceEvent);
 				sent = ` + sent initial message (${formatReceiverStatus(reaction)})`;
-			} else if (outcome.outcome === "buffered") sent = ` + buffered initial message (agents paused: ${outcome.reason})`;
+			} else if (outcome.outcome === "buffered") sent = ` + buffered initial message (paused)`;
 			else sent = ` (initial message NOT delivered: ${outcome.reason})`;
 		}
 		const model = formatModelThinking(`${resolved.provider}/${resolved.id}`, session.thinkingLevel);

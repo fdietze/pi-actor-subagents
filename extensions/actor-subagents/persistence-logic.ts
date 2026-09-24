@@ -113,6 +113,25 @@ export function serializeRoster(
 }
 
 /**
+ * Where a restored agent hangs in the spawn tree, given its persisted parent and that parent's
+ * depth when the parent is live (undefined when it is not).
+ *
+ * Invariant kept here: every agent's `spawnedBy` is a live agent or 'main'. A parent that was
+ * not restored (session file gone, model unavailable, reopen failed) would leave a dangling
+ * parent, so main adopts the orphan — the ancestry walk then always ends at main, and pausing
+ * main's direct children holds the whole restored swarm (Correctness by Construction). Relies on
+ * the roster listing parents before their children, which holds because it is written in spawn
+ * order and a child is only ever spawned by a live parent.
+ */
+export function restoredPlacement(
+	spawnedBy: string,
+	parentDepth: number | undefined,
+): { spawnedBy: string; depth: number } {
+	if (spawnedBy !== "main" && parentDepth !== undefined) return { spawnedBy, depth: parentDepth + 1 };
+	return { spawnedBy: "main", depth: 1 };
+}
+
+/**
  * Convert a validated roster entry into the SDK-facing creation spec.
  * DRY: restoration forwards the same persisted level even when an empty transcript
  * contains no evidence from which the effective level could be reconstructed.

@@ -412,13 +412,9 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 			)) {
 				lines.push(truncateToWidth(line, width));
 			}
-			// Global swarm mode (paused/live) below the list — one source of truth in panel-logic.
-			const stateLine = swarmStateLine(deps.engine.isPaused(), running, deps.engine.pausedAgents().length);
-			lines.push(
-				deps.engine.isPaused()
-					? theme.bg("toolPendingBg", truncateToWidth(stateLine.padEnd(width), width))
-					: theme.bg("selectedBg", stateLine),
-			);
+			// Swarm activity below the list — one source of truth in panel-logic.
+			const stateLine = swarmStateLine(running, deps.engine.pausedAgents().length);
+			lines.push(theme.bg("selectedBg", stateLine));
 			lines.push(theme.fg("dim", truncateToWidth("─".repeat(width), width)));
 			// Chatbox and hint are composed BEFORE the transcript so the transcript can claim exactly
 			// the rows they leave inside the panel's budget (the editor's height varies with input).

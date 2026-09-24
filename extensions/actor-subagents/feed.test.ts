@@ -8,7 +8,7 @@ import {
 	formatResumeSummary,
 } from "./feed.ts";
 import type { AgentStatus } from "./agent-status.ts";
-import type { AgentRecord, PauseReason, Reaction } from "./engine.ts";
+import type { AgentRecord, Reaction } from "./engine.ts";
 import type { OrderedAgent } from "./agent-order.ts";
 
 const rec = (over: Partial<AgentRecord>): AgentRecord => ({
@@ -27,8 +27,8 @@ const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 // children, which is what orderAgents produces for a flat swarm.
 const flat = (agents: AgentRecord[]): OrderedAgent<AgentRecord>[] =>
 	agents.map((agent) => ({ agent, depth: agent.name === "main" ? 0 : 1 }));
-const snapshot = (agents: AgentRecord[], viewer: string, paused?: boolean, now?: number): string =>
-	formatSnapshot(flat(agents), viewer, paused, now);
+const snapshot = (agents: AgentRecord[], viewer: string, now?: number): string =>
+	formatSnapshot(flat(agents), viewer, now);
 
 test("formatSnapshot lists each agent with status and turns", () => {
 	const agents = [
@@ -62,13 +62,6 @@ test("formatSnapshot does not invent a turn count or a spawner for main", () => 
 	assert.doesNotMatch(out, /\(by main\)/);
 });
 
-test("formatSnapshot exposes the paused scheduler and buffering behavior", () => {
-	const out = snapshot([rec({ name: "scout" })], "main", true);
-	assert.match(out, /PAUSED/);
-	assert.match(out, /messages are buffering/);
-	assert.match(out, /subagents-resume/);
-});
-
 test("formatSnapshot shows model and effective thinking level together", () => {
 	const out = snapshot(
 		[rec({ name: "scout", model: "openai-codex/gpt-5.6-sol", thinkingLevel: "xhigh" })],
@@ -87,7 +80,7 @@ test("formatSnapshot renders the ETA as absolute clock time after the custom sta
 	const now = new Date();
 	now.setHours(15, 0, 0, 0);
 	const agents = [rec({ name: "coder", customStatus: "running tests", etaTs: now.getTime() + 20 * 60000 })];
-	const out = snapshot(agents, "main", false, now.getTime());
+	const out = snapshot(agents, "main", now.getTime());
 	assert.match(out, /idle · running tests · ETA ~15:20/);
 });
 
@@ -145,7 +138,7 @@ test("formatSnapshot shows context percent and relative age", () => {
 			subscribe: () => () => {},
 		},
 	});
-	const out = snapshot([withCtx], "main", false, 10_000);
+	const out = snapshot([withCtx], "main", 10_000);
 	assert.match(out, /ctx:42%/);
 	assert.match(out, /last 5s/);
 });
@@ -171,7 +164,7 @@ test("formatMulticastResult distinguishes delivered, paused-buffered, and failed
 				outcome: "delivered",
 				reaction: { observed: "moving", status: { kind: "working", phase: "tool", tool: "bash" } },
 			},
-			{ target: "b", outcome: "buffered", reason: "manual" },
+			{ target: "b", outcome: "buffered" },
 			{ target: "x", outcome: "failed", reason: "unknown agent 'x'" },
 		]),
 		"sent to a (tool:bash) · buffered for b (paused) · failed: x: unknown agent 'x'",
@@ -195,12 +188,6 @@ test("formatMulticastResult reports each receiver state a delivered message can 
 	assert.equal(sentTo({ observed: "gone" }), "sent to a (gone)");
 });
 
-test("formatMulticastResult names the pause cause that parked a message", () => {
-	const buffered = (reason: PauseReason) => formatMulticastResult([{ target: "a", outcome: "buffered", reason }]);
-	assert.equal(buffered("manual"), "buffered for a (paused)");
-	assert.equal(buffered("restored"), "buffered for a (paused after restore)");
-});
-
 test("formatResumeSummary reports released buffer and retriggers, or why nothing happened", () => {
 	assert.equal(
 		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1 }),
@@ -214,11 +201,6 @@ test("formatResumeSummary reports released buffer and retriggers, or why nothing
 	assert.equal(
 		formatResumeSummary({ wasPaused: true, bufferedMessages: 0, retriggered: 0 }),
 		"agents resumed · released 0 buffered messages · retriggered 0 interrupted agents",
-	);
-	// A named resume cannot lift the swarm-wide restored pause; say what actually helps.
-	assert.match(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0, blockedByRestoredPause: true }),
-		/paused after restore · \/subagents-resume without names/,
 	);
 });
 

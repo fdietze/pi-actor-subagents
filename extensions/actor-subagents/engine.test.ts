@@ -155,7 +155,7 @@ test("route buffers while paused", async () => {
 	e.pause();
 	const r = await e.route("main", "coder", "hi");
 
-	assert.deepEqual(r, { outcome: "buffered", reason: "manual" });
+	assert.deepEqual(r, { outcome: "buffered" });
 	assert.equal(delivered, undefined); // Should not deliver
 	assert.deepEqual(e.get("coder")?.pausedInbox, [createRoutedAgentMessage("main", "hi")]);
 	assert.equal(e.events.at(-1)?.type, "route"); // Verify edge count and route event still fired
@@ -166,7 +166,6 @@ test("recordTurnStart counts the agent's turns without limiting them", () => {
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	for (let i = 0; i < 5; i++) assert.equal(e.recordTurnStart("a").abort, false);
 	assert.equal(e.get("a")?.turns, 5);
-	assert.equal(e.isPaused(), false);
 });
 
 test("recordTurnStart aborts while paused", () => {
@@ -178,12 +177,12 @@ test("recordTurnStart aborts while paused", () => {
 	assert.match(r.reason ?? "", /paused/i);
 });
 
-test("resume lifts the restored pause and lets turns run again", () => {
+test("resume lifts a pause and lets turns run again", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.pauseRestored();
+	e.pause(["a"]);
 	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
-	assert.equal(e.isPaused(), false);
+	assert.deepEqual(e.pausedAgents(), []);
 	assert.equal(e.events.at(-1)?.type, "resume");
 	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
 	assert.equal(e.recordTurnStart("a").abort, false);
@@ -198,14 +197,13 @@ test("resume on a live swarm is a no-op and emits nothing", () => {
 	assert.equal(e.events.length, before, "no resume event for a swarm that was never paused");
 });
 
-test("pause marks only mid-turn agents as pausedMidTurn; manual pause reason", () => {
+test("pause marks only mid-turn agents as pausedMidTurn", () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "busy", depth: 1, activity: "thinking" });
 	e.addAgent({ ...mainRecord(), name: "done", depth: 1 });
 	e.pause();
 	assert.equal(e.get("busy")?.pausedMidTurn, true);
 	assert.equal(e.get("done")?.pausedMidTurn, undefined);
-	assert.equal((e.events.at(-1) as { type: string; reason?: string }).reason, "manual");
 	// pausedMidTurn survives the natural agent_end of an allowed-to-complete turn.
 	e.endTurn("busy");
 	assert.equal(e.get("busy")?.pausedMidTurn, true);
@@ -499,7 +497,7 @@ test("resume releases a paused inbox as one ordered batch", async () => {
 	assert.equal(e.get("coder")?.pausedInbox, undefined);
 });
 
-test("a route issued while the swarm is paused buffers and lands on resume", async () => {
+test("a route issued while the target is paused buffers and lands on resume", async () => {
 	const e = new Engine({ ...caps });
 	const delivered: RoutedAgentMessage[] = [];
 	
@@ -526,13 +524,11 @@ test("a route issued while the swarm is paused buffers and lands on resume", asy
 	});
 
 	assert.equal(e.recordTurnStart("explore").abort, false);
-	e.pauseRestored();
-	assert.equal(e.isPaused(), true);
+	e.pause();
 
-	// explore sends to exploit while the swarm-wide stop holds
+	// explore sends to exploit while the pause holds
 	const routeResult = await e.route("explore", "exploit", "do the work");
-	// The swarm-wide cause is named, not the generic "paused": only a full resume lifts it.
-	assert.deepEqual(routeResult, { outcome: "buffered", reason: "restored" });
+	assert.deepEqual(routeResult, { outcome: "buffered" });
 	assert.deepEqual(delivered, []); // exploit didn't receive it yet
 
 	// User resumes the swarm
@@ -607,12 +603,10 @@ test("pause(names) stops only the named agents; the rest keep running", async ()
 	e.addAgent(rec("b"));
 
 	assert.deepEqual(e.pause(["a"]), ["a"]);
-	// The SWARM is not stopped by one manual pause; the paused agent is reported separately.
-	assert.equal(e.isPaused(), false);
 	assert.deepEqual(e.pausedAgents(), ["a"]);
 	assert.equal(e.recordTurnStart("a").abort, true);
 	assert.equal(e.recordTurnStart("b").abort, false);
-	assert.deepEqual(await e.route("main", "a", "hi"), { outcome: "buffered", reason: "manual" });
+	assert.deepEqual(await e.route("main", "a", "hi"), { outcome: "buffered" });
 	assert.deepEqual(await e.route("main", "b", "hi"), { outcome: "delivered" });
 	assert.deepEqual(delivered, ["b"]);
 	assert.equal(formatStatus(agentStatus(e.get("a")!)), "paused"); // idle-but-paused reads as paused
@@ -626,8 +620,8 @@ test("pause() without names pauses every background agent but never 'main'", () 
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	assert.deepEqual(e.pause(), ["a"]);
 	assert.equal(e.get("main")?.paused, undefined);
-	const event = e.events.at(-1) as { type: string; reason: string; names: string[] };
-	assert.deepEqual({ type: event.type, reason: event.reason, names: event.names }, { type: "pause", reason: "manual", names: [] });
+	const event = e.events.at(-1) as { type: string; names: string[] };
+	assert.deepEqual({ type: event.type, names: event.names }, { type: "pause", names: ["a"] });
 	assert.deepEqual(e.pause(["a"]), [], "an already paused agent is not reported as newly paused");
 });
 
@@ -667,40 +661,13 @@ test("resume(names) releases only those agents", async () => {
 	);
 });
 
-test("resume(names) is refused while the swarm is paused after a restore", () => {
-	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
-	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
-	e.pauseRestored();
-	assert.deepEqual(e.resume(["a"]), {
-		wasPaused: false,
-		bufferedMessages: 0,
-		blockedByRestoredPause: true,
-	});
-	assert.equal(e.recordTurnStart("a").abort, true, "the restored pause still holds");
-	// Only the full resume lifts it.
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
-	assert.equal(e.recordTurnStart("a").abort, false);
-});
-
-test("resume() without names clears every manual pause", () => {
+test("resume() without names clears every pause", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
 	e.pause();
 	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
 	assert.deepEqual(e.pausedAgents(), []);
-	assert.equal(e.isPaused(), false);
-});
-
-test("pauseRestored() blocks every agent until a full resume", () => {
-	const e = new Engine(caps);
-	e.addAgent({ ...mainRecord(), name: "a", depth: 1, activity: "tool" });
-	e.pauseRestored();
-	assert.equal(e.isPaused(), true);
-	assert.equal(e.get("a")?.pausedMidTurn, true);
-	assert.equal(e.recordTurnStart("a").abort, true);
-	const event = e.events.at(-1) as { type: string; reason: string; names: string[] };
-	assert.deepEqual({ type: event.type, reason: event.reason, names: event.names }, { type: "pause", reason: "restored", names: [] });
 });
 
 // ── panel input: a real user turn, never silently swallowed ──
@@ -896,13 +863,11 @@ test("awaitReaction never waits on 'main' and does not claim to have watched it"
 	});
 });
 
-test("statusOf folds the swarm-wide pause into the per-record status", () => {
+test("statusOf reports a paused agent as paused", () => {
 	const e = new Engine(caps);
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	assert.deepEqual(e.statusOf("a"), { kind: "idle" });
-	e.pauseRestored();
-	// agentStatus() alone cannot see the swarm-wide pause: that state lives on the engine, by design.
-	assert.deepEqual(agentStatus(e.get("a")!), { kind: "idle" });
+	e.pause(["a"]);
 	assert.deepEqual(e.statusOf("a"), { kind: "paused" });
 	assert.equal(e.statusOf("ghost"), undefined);
 });

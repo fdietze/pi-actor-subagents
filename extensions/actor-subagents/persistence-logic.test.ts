@@ -5,6 +5,7 @@ import {
 	deriveStatus,
 	parseRoster,
 	type RawMessage,
+	restoredPlacement,
 	serializeRoster,
 	sessionSpecFromRoster,
 } from "./persistence-logic.ts";
@@ -127,4 +128,13 @@ test("parseRoster: malformed -> []", () => {
 	assert.deepEqual(parseRoster("not json"), []);
 	assert.deepEqual(parseRoster("{}"), []);
 	assert.deepEqual(parseRoster('[{"name":"a"}]'), []); // missing required fields
+});
+
+test("restoredPlacement keeps a live parent and lets main adopt an orphan", () => {
+	assert.deepEqual(restoredPlacement("main", 0), { spawnedBy: "main", depth: 1 });
+	// main needs no record to be a valid parent: it is the root.
+	assert.deepEqual(restoredPlacement("main", undefined), { spawnedBy: "main", depth: 1 });
+	assert.deepEqual(restoredPlacement("lead", 1), { spawnedBy: "lead", depth: 2 });
+	// The parent was not restored: main adopts the orphan, so no spawnedBy dangles.
+	assert.deepEqual(restoredPlacement("gone", undefined), { spawnedBy: "main", depth: 1 });
 });

@@ -89,14 +89,10 @@ export interface RosterEntry {
 export const rosterDepth = (depth: number): number => Math.max(0, depth - 1);
 
 /**
- * Scheduler state line, shown below the roster (panel) and footer. `swarmPaused` is the
- * swarm-wide stop (a restored session) that holds every agent; `pausedCount` is how
- * many agents the human paused individually while the swarm itself runs. Keeping them apart
- * matters: claiming "messages buffer" for the whole swarm while other agents keep working and
- * receiving mail would be false. The per-agent phase (thinking/tool:.../paused) lives in the rows.
+ * Scheduler state line, shown below the roster (panel) and footer: how many agents work and how
+ * many are paused. The per-agent phase (thinking/tool:.../paused) lives in the rows.
  */
-export function swarmStateLine(swarmPaused: boolean, runningCount: number, pausedCount: number): string {
-	if (swarmPaused) return " ⏸ PAUSED — messages buffer · /subagents-resume to continue ";
+export function swarmStateLine(runningCount: number, pausedCount: number): string {
 	const activity = runningCount > 0 ? `${runningCount} working` : "idle";
 	return ` ▶ live · ${activity}${pausedCount > 0 ? ` · ${pausedCount} paused` : ""} `;
 }
