@@ -22,7 +22,6 @@ function toolOf(engine: Engine, self: string, name: string) {
 		engine,
 		spawnAgent: async () => ({ ok: true, msg: "" }),
 		setAgentModel: async () => ({ ok: true, msg: "" }),
-		pauseAgents: (by, names) => engine.pause(by, names),
 		resumeAgents: (by, names) => engine.resume(by, names),
 		persistRoster: () => {},
 		updateStatus: () => {},

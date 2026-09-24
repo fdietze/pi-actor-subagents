@@ -220,6 +220,9 @@ export class Engine {
 	// Graph tracking (in-memory, survives /reload via the singleton, resets on pi restart).
 	private readonly messageEdges = new Map<string, Map<string, number>>(); // from -> (to -> count)
 	private readonly caps: Caps;
+	// Aborts started by pause() and not yet finished, per agent. resume() waits for them: an abort
+	// that lands after the agent runs again would kill the turn resume just started.
+	private readonly aborting = new Map<string, Promise<void>>();
 
 	// Note: no TS parameter properties — Node's strip-only mode (node --test on .ts)
 	// does not support them.
@@ -525,12 +528,19 @@ export class Engine {
 	 * held without extra bookkeeping, and a flag set by a lower owner survives an ancestor's resume
 	 * (Correctness by Construction).
 	 *
-	 * The walk terminates because every `spawnedBy` names a live agent or 'main' and parents are
-	 * registered before their children, so the parent links cannot form a cycle.
 	 */
 	private pausedBy(rec: AgentRecord): string | undefined {
+		return this.nearest(rec, (cur) => cur.paused === true)?.name;
+	}
+
+	/**
+	 * The nearest of `rec` and its ancestors (below 'main') that matches. The walk terminates
+	 * because every `spawnedBy` names a live agent or 'main' and parents are registered before
+	 * their children, so the parent links cannot form a cycle.
+	 */
+	private nearest(rec: AgentRecord, match: (cur: AgentRecord) => boolean): AgentRecord | undefined {
 		for (let cur: AgentRecord | undefined = rec; cur && cur.name !== "main"; cur = this.agents.get(cur.spawnedBy)) {
-			if (cur.paused) return cur.name;
+			if (match(cur)) return cur;
 		}
 		return undefined;
 	}
@@ -617,8 +627,9 @@ export class Engine {
 	/**
 	 * `by` pauses agents in its subtree — the named ones, or its direct children when none are
 	 * named — by setting their own flag. `affected` lists every agent that went from running to
-	 * paused, which is the targets plus their subtrees, so the caller can abort exactly those turns.
-	 * Whoever of them is mid-turn is marked `pausedMidTurn` so resume re-triggers that work.
+	 * paused, which is the targets plus their subtrees; their running turns are aborted. Aborting
+	 * AFTER the flag is set means a turn cut here cannot start a successor. Whoever of them is
+	 * mid-turn is marked `pausedMidTurn` so resume re-triggers that work.
 	 * Pausing an already paused agent succeeds and changes nothing.
 	 *
 	 * Nothing flagged means no event: a mistyped or already-paused name must not show up in the
@@ -637,6 +648,7 @@ export class Engine {
 		const newlyPaused = this.background().filter((rec) => !before.has(rec.name) && this.isAgentPaused(rec));
 		// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
 		for (const rec of newlyPaused) if (rec.activity !== undefined) rec.pausedMidTurn = true;
+		for (const rec of newlyPaused) this.abortRecord(rec);
 		this.emit({ type: "pause", names: flagged, ts: Date.now() });
 		return { results, affected: newlyPaused.map((rec) => rec.name) };
 	}
@@ -649,9 +661,23 @@ export class Engine {
 	 * says so. `interrupted` lists the released agents that were paused mid-turn, for the caller to
 	 * re-trigger.
 	 *
+	 * It first waits for the outstanding pause aborts of exactly the agents it will release, so the
+	 * typical "pause, correct via send_message, resume" sequence cannot have a late abort kill the
+	 * resumed turn (Inversion), while a slow abort of an agent that stays paused — elsewhere, or
+	 * under a lower owner's own flag — cannot hold this resume hostage. The decision itself runs synchronously after that wait, on the state as it
+	 * is then.
+	 *
 	 * Nothing cleared means no event.
 	 */
-	resume(by: string, names?: string[]): EngineResumeResult {
+	async resume(by: string, names?: string[]): Promise<EngineResumeResult> {
+		// No await between the last scan and the decision below: a pause landing in such a gap
+		// would have its fresh flag cleared while its abort is still in flight. With nothing
+		// pending the whole resume runs synchronously, in call order.
+		for (;;) {
+			const pending = this.pendingAborts(new Set(this.controlTargets(by, names).recs.map((rec) => rec.name)));
+			if (pending.length === 0) break;
+			await Promise.all(pending);
+		}
 		const { results, recs } = this.controlTargets(by, names);
 		const before = this.pausedSet();
 		const cleared = recs.filter((rec) => rec.paused === true);
@@ -683,6 +709,37 @@ export class Engine {
 
 		this.emit({ type: "resume", names: cleared.map((rec) => rec.name), ts: Date.now() });
 		return { results, affected: released.map((rec) => rec.name), interrupted, bufferedMessages };
+	}
+
+	/**
+	 * The aborts in flight for agents that clearing the flags of `targets` would set running: paused
+	 * now, but by no flag outside `targets`.
+	 */
+	private pendingAborts(targets: ReadonlySet<string>): Promise<void>[] {
+		const wouldRun = (rec: AgentRecord) =>
+			this.isAgentPaused(rec) && !this.nearest(rec, (cur) => cur.paused === true && !targets.has(cur.name));
+		return [...this.aborting].flatMap(([name, done]) => {
+			const rec = this.agents.get(name);
+			return rec && wouldRun(rec) ? [done] : [];
+		});
+	}
+
+	/**
+	 * Abort an agent's running turn, tracked until it finishes (see `aborting`). Fire-and-forget
+	 * for the caller, but a failure is reported rather than left as an unhandled rejection, which
+	 * would take pi down.
+	 */
+	private abortRecord(rec: AgentRecord): void {
+		const done = (async () => {
+			try {
+				await rec.handle.abort();
+			} catch (error) {
+				this.reportError(rec.name, `abort failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		})().finally(() => {
+			if (this.aborting.get(rec.name) === done) this.aborting.delete(rec.name);
+		});
+		this.aborting.set(rec.name, done);
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {

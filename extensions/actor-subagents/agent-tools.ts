@@ -19,7 +19,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { orderAgents } from "./agent-order.ts";
-import type { ControlResult, Engine, EngineResumeResult } from "./engine.ts";
+import type { Engine, EngineResumeResult } from "./engine.ts";
 import {
   formatControlResult,
   formatMulticastResult,
@@ -90,10 +90,8 @@ export interface AgentToolsDeps {
   spawnAgent: Spawner["spawnAgent"];
   /** Change a running agent's model/effort (set-agent-model.ts owns the rules). */
   setAgentModel: AgentModelSetter;
-  /** Pause agents as `by` and abort the turns that stopped (the shell owns the aborts). */
-  pauseAgents: (by: string, names?: string[]) => ControlResult;
   /** Resume agents as `by` and re-trigger the interrupted ones (the shell owns the nudges). */
-  resumeAgents: (by: string, names?: string[]) => EngineResumeResult;
+  resumeAgents: (by: string, names?: string[]) => Promise<EngineResumeResult>;
   /** Persist the membership roster after a spawn or kill. */
   persistRoster: () => void;
   /** Refresh the status widget after a change an agent made. */
@@ -111,7 +109,6 @@ export function makeAgentTools(
     engine,
     spawnAgent,
     setAgentModel,
-    pauseAgents,
     resumeAgents,
     persistRoster,
     updateStatus,
@@ -357,7 +354,8 @@ export function makeAgentTools(
         ),
       }),
       execute: async (_id, args) => {
-        const result = pauseAgents(selfName, normalizeTargets(args.names ?? []));
+        const result = engine.pause(selfName, normalizeTargets(args.names ?? []));
+        updateStatus();
         return {
           content: [{ type: "text", text: formatControlResult("pause", result) }],
           details: result,
@@ -386,7 +384,7 @@ export function makeAgentTools(
         ),
       }),
       execute: async (_id, args) => {
-        const result = resumeAgents(selfName, normalizeTargets(args.names ?? []));
+        const result = await resumeAgents(selfName, normalizeTargets(args.names ?? []));
         return {
           content: [{ type: "text", text: formatResumeResult(result) }],
           details: result,

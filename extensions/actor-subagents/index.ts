@@ -29,7 +29,6 @@ import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
 import {
   type AgentHandle,
-  type ControlResult,
   Engine,
   type EngineResumeResult,
 } from "./engine.ts";
@@ -163,7 +162,8 @@ const RESUME_NUDGE = (now: Date) => {
 //      derived (own flag or an ancestor's), resume returns the released/interrupted agents,
 //      Engine.status(rec) is the displayed status, and getSpawnTree() is derived from live
 //      records. pause/resume/kill/retune take the acting agent first; pause/resume/kill take a
-//      names list and return per-target outcomes. A v25 instance would keep a swarm-wide pause this code can no longer lift.
+//      names list and return per-target outcomes; pause aborts the stopped turns itself and
+//      resume is async, waiting for those aborts. A v25 instance would keep a swarm-wide pause this code can no longer lift.
 const ENGINE_KEY = "__subagentsEngine_v26";
 
 function getEngine(): Engine {
@@ -264,7 +264,6 @@ export default function subagents(pi: ExtensionAPI) {
       engine,
       spawnAgent,
       setAgentModel,
-      pauseAgents,
       resumeAgents,
       persistRoster,
       updateStatus,
@@ -743,22 +742,12 @@ export default function subagents(pi: ExtensionAPI) {
     engine.pause("main");
   };
 
-  // Shared by /subagents-pause and the pause_subagents tool, acting as `by`: record the pause,
-  // then abort every agent that stopped. Aborting AFTER the pause is recorded means a turn cut here
-  // cannot start a successor.
-  const pauseAgents = (by: string, names?: string[]): ControlResult => {
-    const result = engine.pause(by, names);
-    for (const name of result.affected) void abortAgent(name);
-    updateStatus();
-    return result;
-  };
-
   // Shared by /subagents-resume and the resume_subagents tool, acting as `by`: the engine clears
   // the targets' own pause and releases the buffered messages of every agent that runs again;
   // the interrupted ones among those are re-triggered in `by`'s name, so their reply goes to the
   // agent that resumed them.
-  const resumeAgents = (by: string, names?: string[]): EngineResumeResult => {
-    const result = engine.resume(by, names);
+  const resumeAgents = async (by: string, names?: string[]): Promise<EngineResumeResult> => {
+    const result = await engine.resume(by, names);
     const nudge = RESUME_NUDGE(new Date());
     for (const name of result.interrupted) void engine.route(by, name, nudge);
     updateStatus();
@@ -768,18 +757,6 @@ export default function subagents(pi: ExtensionAPI) {
   // Swarm control commands take an optional agent-name list; empty means all of main's children.
   const parseNames = (args: string): string[] =>
     args.split(/[\s,]+/).filter((name) => name.length > 0);
-
-  // Aborting is fire-and-forget, but a rejected promise with no handler would take pi down.
-  const abortAgent = async (name: string): Promise<void> => {
-    try {
-      await engine.get(name)?.handle.abort();
-    } catch (error) {
-      engine.reportError(
-        name,
-        `abort failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  };
 
   // Capture the foreground model (for inheritance to spawned agents).
   pi.on("model_select", (event) => {
@@ -976,7 +953,8 @@ export default function subagents(pi: ExtensionAPI) {
       "Pause agents by name (empty = all of main's children; subtrees follow): their turns stop " +
       "and new messages buffer until resumed.",
     handler: async (args, ctx) => {
-      ctx.ui.notify(formatControlResult("pause", pauseAgents("main", parseNames(args))), "warning");
+      ctx.ui.notify(formatControlResult("pause", engine.pause("main", parseNames(args))), "warning");
+      updateStatus();
     },
   });
 
@@ -985,7 +963,7 @@ export default function subagents(pi: ExtensionAPI) {
       "Resume agents by name (empty = all of main's children; subtrees follow): release buffered " +
       "messages and retrigger interrupted work.",
     handler: async (args, ctx) => {
-      ctx.ui.notify(formatResumeResult(resumeAgents("main", parseNames(args))), "info");
+      ctx.ui.notify(formatResumeResult(await resumeAgents("main", parseNames(args))), "info");
     },
   });
 
