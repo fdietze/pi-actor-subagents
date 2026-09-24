@@ -39,16 +39,17 @@ test("a failing abort goes to onError and still settles", async () => {
 	assert.equal(tracker.pending(() => true).length, 0);
 });
 
-test("an older abort settling leaves a newer abort for the same agent tracked", async () => {
+test("every abort of an agent stays pending until it settles, in any order", async () => {
 	const tracker = new AbortTracker();
 	const first = gate();
 	const second = gate();
 	tracker.track("a", first.abort, () => {});
 	tracker.track("a", second.abort, () => {});
-	first.open();
+	assert.equal(tracker.pending(() => true).length, 2);
+	second.open(); // the newer one settles first
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	assert.equal(tracker.pending(() => true).length, 1, "the newer abort is still in flight");
-	second.open();
+	assert.equal(tracker.pending(() => true).length, 1, "the older abort can still land");
+	first.open();
 	await Promise.all(tracker.pending(() => true));
 	assert.equal(tracker.pending(() => true).length, 0);
 });

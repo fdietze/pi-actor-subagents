@@ -1190,3 +1190,41 @@ test("a pause racing an in-flight resume wins in call order", async () => {
 	const next = await e.resume("main", ["beta"]);
 	assert.deepEqual({ interrupted: next.interrupted, bufferedMessages: next.bufferedMessages }, { interrupted: ["beta"], bufferedMessages: 1 });
 });
+
+test("a resumed agent waits for every abort in flight, not only the newest", async () => {
+	// pause (abort A), resume, pause (abort B), resume; B lands first, A late.
+	const e = new Engine(caps);
+	const log: string[] = [];
+	const aborts: (() => void)[] = [];
+	e.addAgent({
+		...mainRecord(),
+		name: "w",
+		depth: 1,
+		activity: "tool",
+		handle: {
+			deliver: async () => {
+				log.push("delivered");
+			},
+			abort: () =>
+				new Promise<void>((resolve) => {
+					const n = aborts.length;
+					aborts.push(() => {
+						log.push(`abort ${n}`);
+						resolve();
+					});
+				}),
+		},
+	});
+	e.pause("main", ["w"]);
+	await e.route("main", "w", "correction");
+	const first = e.resume("main", ["w"]);
+	e.pause("main", ["w"]);
+	const second = e.resume("main", ["w"]);
+	aborts[1]?.();
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.deepEqual(log, ["abort 1"], "the older abort can still land: nothing is released");
+	assert.equal(e.recordTurnStart("w").abort, true);
+	aborts[0]?.();
+	await Promise.all([first, second]);
+	assert.deepEqual(log, ["abort 1", "abort 0", "delivered"]);
+});
