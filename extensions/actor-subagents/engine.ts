@@ -8,6 +8,7 @@ import {
 	type RoutedAgentMessage,
 } from "./agent-message.ts";
 import type { AgentEvent } from "./agent-event.ts";
+import { AbortTracker } from "./abort-tracker.ts";
 import { authorize } from "./authorize.ts";
 import type { AgentHandle, AgentRecord, AgentTuning, AgentView, ModelChange } from "./agent-record.ts";
 import { type AgentActivity, type AgentStatus, agentStatus, type StopReason } from "./agent-status.ts";
@@ -73,7 +74,7 @@ export class Engine {
 	private readonly caps: Caps;
 	// Aborts started by pause() and not yet finished, per agent. resume() waits for them: an abort
 	// that lands after the agent runs again would kill the turn resume just started.
-	private readonly aborting = new Map<string, Promise<void>>();
+	private readonly aborts = new AbortTracker();
 
 	// Note: no TS parameter properties — Node's strip-only mode (node --test on .ts)
 	// does not support them.
@@ -436,7 +437,13 @@ export class Engine {
 		const newlyPaused = this.background().filter((rec) => !before.has(rec.name) && this.isAgentPaused(rec));
 		// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
 		for (const rec of newlyPaused) if (rec.activity !== undefined) rec.pausedMidTurn = true;
-		for (const rec of newlyPaused) this.abortRecord(rec);
+		for (const rec of newlyPaused) {
+			this.aborts.track(
+				rec.name,
+				() => rec.handle.abort(),
+				(error) => this.reportError(rec.name, `abort failed: ${error instanceof Error ? error.message : String(error)}`),
+			);
+		}
 		this.emit({ type: "pause", names: flagged, ts: Date.now() });
 		return { results, affected: newlyPaused.map((rec) => rec.name) };
 	}
@@ -506,28 +513,10 @@ export class Engine {
 	private pendingAborts(targets: ReadonlySet<string>): Promise<void>[] {
 		const wouldRun = (rec: AgentRecord) =>
 			this.isAgentPaused(rec) && !nearest(this.agents, rec, (cur) => cur.paused === true && !targets.has(cur.name));
-		return [...this.aborting].flatMap(([name, done]) => {
+		return this.aborts.pending((name) => {
 			const rec = this.agents.get(name);
-			return rec && wouldRun(rec) ? [done] : [];
+			return rec !== undefined && wouldRun(rec);
 		});
-	}
-
-	/**
-	 * Abort an agent's running turn, tracked until it finishes (see `aborting`). Fire-and-forget
-	 * for the caller, but a failure is reported rather than left as an unhandled rejection, which
-	 * would take pi down.
-	 */
-	private abortRecord(rec: AgentRecord): void {
-		const done = (async () => {
-			try {
-				await rec.handle.abort();
-			} catch (error) {
-				this.reportError(rec.name, `abort failed: ${error instanceof Error ? error.message : String(error)}`);
-			}
-		})().finally(() => {
-			if (this.aborting.get(rec.name) === done) this.aborting.delete(rec.name);
-		});
-		this.aborting.set(rec.name, done);
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {

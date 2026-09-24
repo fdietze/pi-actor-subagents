@@ -49,6 +49,7 @@ There are no open ports or separate services. The extension has the same process
 - `engine.ts`: stateful actor registry and orchestration: spawn/attach, scheduling, routing, pause/resume, kill/retune
 - `spawn-tree.ts`: pure spawn-tree rules (ancestry, children, kill order, derived pause `pausedBy`)
 - `authorize.ts`: the subtree authority rule, "who spawns, owns"
+- `abort-tracker.ts`: per-agent aborts in flight, which resume waits for
 - `agent-record.ts`, `agent-event.ts`, `control-result.ts`: the engine's record, event and control-result types
 - `settings.ts`: pure parser for `settings.json` (caps + child extension policy) and the default caps
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
