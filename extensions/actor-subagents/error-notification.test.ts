@@ -31,3 +31,9 @@ test("a killed agent does not notify, and nobody notifies a killed parent", () =
 	assert.equal(errorNotification({ name: "worker", reason: "gone" }, tree, live("main", "lead")), undefined);
 	assert.equal(errorNotification({ name: "worker", reason: "gone" }, tree, live("main", "worker")), undefined);
 });
+
+test("a reason that ends in a period is not given a second one", () => {
+	const n = errorNotification({ name: "worker", reason: "The operation was aborted." }, { worker: "main" }, live("main", "worker"));
+	assert.doesNotMatch(n?.content ?? "", /\.\./);
+	assert.match(n?.content ?? "", /The operation was aborted\. It will not/);
+});

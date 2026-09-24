@@ -155,10 +155,24 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 	// track the turn phase.
 	// streamingRef.msg holds the current turn's in-progress assistant message so the panel can
 	// seed it on switch (view.getStreamingMessage). The partial lives only here mid-turn.
-	const subscribeBackground = (name: string, session: SessionLike, streamingRef: { msg: unknown }): (() => void) => {
+	//
+	// run.abortRequested records that WE aborted the current logical run (a pause, a kill, or a
+	// refused turn). The SDK can file such a run as an "error" — a provider call that fails on the
+	// already aborted signal after a cancelled tool — so the settled outcome of that run is
+	// "aborted": a deliberate stop must not enter the error state or wake the parent. Our own fact
+	// decides, not the SDK's wording (The Map Is Not the Territory). agent_start clears it, so an
+	// abort that hit no run cannot mask an error in the next one.
+	const subscribeBackground = (
+		name: string,
+		session: SessionLike,
+		streamingRef: { msg: unknown },
+		run: { abortRequested: boolean },
+	): (() => void) => {
 		return session.subscribe((ev) => {
+			if (ev.type === "agent_start") run.abortRequested = false;
 			if (ev.type === "turn_start") {
 				const r = engine.recordTurnStart(name);
+				if (r.abort) run.abortRequested = true;
 				// Fire-and-forget, but never as an unhandled rejection: this runs inside an SDK event
 				// callback, where a rejected promise would take the whole pi process down.
 				if (r.abort)
@@ -197,7 +211,8 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 				// The SDK emits agent_end for every retry attempt. Only agent_settled closes the
 				// logical run, so deriving its outcome here produces one parent notification.
 				const outcome = lastAssistantOutcome(session.messages);
-				engine.setStopReason(name, outcome?.stopReason, outcome?.errorMessage);
+				const stopReason = run.abortRequested && outcome?.stopReason === "error" ? "aborted" : outcome?.stopReason;
+				engine.setStopReason(name, stopReason, outcome?.errorMessage);
 			}
 			onActivity?.();
 		});
@@ -211,6 +226,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		session: SessionLike,
 		systemPrompt: string,
 	): { handle: AgentHandle; view: AgentView; close: () => Promise<void>; reconfigure: NonNullable<AgentRecord["reconfigure"]> } => {
+		const run = { abortRequested: false };
 		const handle: AgentHandle = {
 			// Fire-and-forget: Pi's custom-message delivery awaits the prompted turn. Awaiting it
 			// would block the caller (e.g. the spawn_subagent tool) until the target agent finishes.
@@ -235,6 +251,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			// pause that leaves a build or test run alive would not be a pause at all. A failing bash
 			// cancel must not swallow the agent abort — stopping the loop is the part that must happen.
 			abort: async () => {
+				run.abortRequested = true;
 				try {
 					await session.abortBash();
 				} catch (e) {
@@ -254,7 +271,7 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			getToolDefinition: (toolName) => session.getToolDefinition(toolName),
 			subscribe: (l) => session.subscribe(l),
 		};
-		const detach = subscribeBackground(name, session, streamingRef);
+		const detach = subscribeBackground(name, session, streamingRef, run);
 		// Retune adapter: apply what was asked, then report what the session ENDED UP with. The
 		// level is read back because a model clamps an effort it cannot deliver, and the order
 		// matters — the model must be in place before its clamping can be observed.

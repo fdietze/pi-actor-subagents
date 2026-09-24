@@ -593,3 +593,54 @@ test("panel input reaches the child as a real user message", async () => {
 	assert.deepEqual(session.userMessages, ["try the other approach"]);
 	assert.deepEqual(session.delivered, [], "user text must not be projected as peer traffic");
 });
+
+test("a run we aborted settles as aborted even when the SDK files it as an error", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	withMain(engine, []);
+	const session = new FakeSession();
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "beta", systemPrompt: "work" }, "main");
+	const errors = () => engine.events.filter((event) => event.type === "error");
+	// What the live SDK wrote after our pause cut a bash call: the next provider call fails as "error".
+	const abortedCall = { role: "assistant", stopReason: "error", errorMessage: "The operation was aborted." };
+
+	session.emit("agent_start");
+	engine.setActivity("beta", "tool", "bash");
+	engine.pause("main", ["beta"]);
+	await engine.resume("main", []); // lets the tracked abort settle; nothing named, nothing resumed
+	session.messages.push(abortedCall);
+	session.emit("agent_end");
+	session.emit("agent_settled");
+	assert.equal(errors().length, 0, "our own pause is a deliberate stop, not the error state");
+	assert.equal(engine.get("beta")?.stopReason, "aborted");
+
+	// The next run starts clean: a real error in it still notifies.
+	await engine.resume("main", ["beta"]);
+	session.emit("agent_start");
+	session.messages.push({ role: "assistant", stopReason: "error", errorMessage: "provider unavailable" });
+	session.emit("agent_settled");
+	assert.equal(errors().length, 1);
+	assert.equal(engine.get("beta")?.stopReason, "error");
+});
+
+test("an abort while idle does not mask an error in a later run", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	withMain(engine, []);
+	const session = new FakeSession();
+	const spawner = createSpawner({
+		engine,
+		resolveModel: () => ({ provider: "t", id: "m", model: {} }),
+		createSession: async () => ({ session }),
+	});
+	await spawner.spawnAgent({ name: "beta", systemPrompt: "work" }, "main");
+	engine.pause("main", ["beta"]); // idle: the abort ends no run
+	await engine.resume("main", ["beta"]);
+	session.emit("agent_start");
+	session.messages.push({ role: "assistant", stopReason: "error", errorMessage: "provider unavailable" });
+	session.emit("agent_settled");
+	assert.equal(engine.get("beta")?.stopReason, "error");
+});

@@ -32,7 +32,8 @@ export function errorNotification(
 	return {
 		to: parent,
 		content:
-			`subagent \`${error.name}\` entered the error state: ${error.reason}. ` +
+			// The reason's own final period is dropped so the sentence ends exactly once.
+			`subagent \`${error.name}\` entered the error state: ${error.reason.replace(/\.+$/, "")}. ` +
 			`It will not report back on its own — inspect it with subagent_history and decide how to continue.`,
 	};
 }
