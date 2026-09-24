@@ -1,5 +1,7 @@
 /**
- * Subagents Engine — pure policy + registry, no pi-SDK dependency.
+ * Subagents Engine — the stateful agent registry and its orchestration (spawn, route, pause,
+ * kill, turn bookkeeping), no pi-SDK dependency. The pure tree and authority rules it applies
+ * live in spawn-tree.ts and authorize.ts.
  * Design: ../../../DESIGN.md
  */
 import {
