@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRoutedAgentMessage, type RoutedAgentMessage } from "./agent-message.ts";
 import { agentStatus, formatStatus } from "./agent-status.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
+import { errorNotification } from "./error-notification.ts";
 import { formatSendTargets } from "./panel-logic.ts";
 
 const fakeHandle = (): AgentHandle => ({
@@ -181,10 +182,10 @@ test("resume lifts a pause and lets turns run again", () => {
 	const e = new Engine({ maxAgents: 5, maxSpawnDepth: 5 });
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.pause(["a"]);
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { resumed: ["a"], interrupted: [], bufferedMessages: 0 });
 	assert.deepEqual(e.pausedAgents(), []);
 	assert.equal(e.events.at(-1)?.type, "resume");
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { resumed: [], interrupted: [], bufferedMessages: 0 });
 	assert.equal(e.recordTurnStart("a").abort, false);
 });
 
@@ -193,7 +194,7 @@ test("resume on a live swarm is a no-op and emits nothing", () => {
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.recordTurnStart("a");
 	const before = e.events.length;
-	assert.deepEqual(e.resume(), { wasPaused: false, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { resumed: [], interrupted: [], bufferedMessages: 0 });
 	assert.equal(e.events.length, before, "no resume event for a swarm that was never paused");
 });
 
@@ -489,7 +490,7 @@ test("resume releases a paused inbox as one ordered batch", async () => {
 
 	assert.deepEqual(delivered, []); // Buffered
 
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 2 });
+	assert.deepEqual(e.resume(), { resumed: ["coder"], interrupted: [], bufferedMessages: 2 });
 
 	assert.deepEqual(delivered, [
 		{ parts: [{ from: "main", content: "ping 1" }, { from: "main", content: "ping 2" }] },
@@ -643,7 +644,7 @@ test("resume(names) releases only those agents", async () => {
 	e.recordTurnStart("a");
 	e.pause();
 
-	assert.deepEqual(e.resume(["a"]), { wasPaused: true, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(["a"]), { resumed: ["a"], interrupted: [], bufferedMessages: 0 });
 	assert.equal(e.get("a")?.turns, 1, "per-agent turn telemetry survives a resume");
 	assert.equal(e.get("a")?.paused, false);
 	assert.equal(e.get("b")?.paused, true, "unnamed agents stay paused");
@@ -656,7 +657,7 @@ test("resume(names) releases only those agents", async () => {
 	assert.deepEqual(delivered, [createRoutedAgentMessage("main", "back to work")]);
 	assert.deepEqual(
 		e.resume(["ghost"]),
-		{ wasPaused: false, bufferedMessages: 0 },
+		{ resumed: [], interrupted: [], bufferedMessages: 0 },
 		"unknown names resume nothing",
 	);
 });
@@ -666,7 +667,7 @@ test("resume() without names clears every pause", () => {
 	e.addAgent({ ...mainRecord(), name: "a", depth: 1 });
 	e.addAgent({ ...mainRecord(), name: "b", depth: 1 });
 	e.pause();
-	assert.deepEqual(e.resume(), { wasPaused: true, bufferedMessages: 0 });
+	assert.deepEqual(e.resume(), { resumed: ["a", "b"], interrupted: [], bufferedMessages: 0 });
 	assert.deepEqual(e.pausedAgents(), []);
 });
 
@@ -890,4 +891,115 @@ test("route reports the fate decided at delivery, not the pause state after it",
 	// The session already has the message, so calling it "buffered" would be a lie.
 	assert.deepEqual(await routed, { outcome: "delivered" });
 	assert.equal(e.get("slow")?.pausedInbox, undefined);
+});
+
+// ── derived pause: an agent is paused while it or any ancestor carries its own flag ──
+
+/** main -> a -> b -> c, each recording what its handle is handed. */
+function chain() {
+	const e = new Engine({ maxAgents: 8, maxSpawnDepth: 5 });
+	const delivered: Record<string, RoutedAgentMessage[]> = { a: [], b: [], c: [] };
+	e.addAgent(mainRecord());
+	for (const [name, parent, depth] of [["a", "main", 1], ["b", "a", 2], ["c", "b", 3]] as const) {
+		e.addAgent({
+			...mainRecord(),
+			name,
+			spawnedBy: parent,
+			depth,
+			handle: {
+				deliver: async (message) => {
+					delivered[name]?.push(message);
+				},
+				abort: async () => {},
+			},
+		});
+	}
+	return { e, delivered };
+}
+
+test("pausing an agent holds its whole subtree and reports every agent that stopped", async () => {
+	const { e, delivered } = chain();
+	e.setActivity("b", "tool", "bash");
+	assert.deepEqual(e.pause(["a"]), ["a", "b", "c"], "the caller aborts the whole subtree");
+	assert.equal(e.get("c")?.paused, undefined, "only the named agent carries its own flag");
+	assert.deepEqual(e.pausedAgents(), ["a", "b", "c"]);
+	assert.equal(e.get("b")?.pausedMidTurn, true, "a mid-turn descendant is marked for re-triggering");
+	assert.equal(e.get("c")?.pausedMidTurn, undefined);
+	assert.equal(e.recordTurnStart("c").abort, true);
+	assert.deepEqual(await e.route("main", "c", "hold"), { outcome: "buffered" });
+	assert.deepEqual(delivered.c, []);
+	assert.deepEqual(e.statusOf("c"), { kind: "paused" });
+	assert.deepEqual(e.status(e.get("c")!), { kind: "paused" });
+	const event = e.events.filter((ev) => ev.type === "pause").at(-1) as { names: string[] };
+	assert.deepEqual(event.names, ["a"], "the event names the flag that changed");
+});
+
+test("resuming an ancestor releases every descendant it held, each inbox as one batch", async () => {
+	const { e, delivered } = chain();
+	e.setActivity("b", "thinking");
+	e.pause(["a"]);
+	e.endTurn("b"); // the aborted turn ends
+	await e.route("main", "c", "one");
+	await e.route("b", "c", "two");
+	assert.deepEqual(e.resume(["a"]), { resumed: ["a", "b", "c"], interrupted: ["b"], bufferedMessages: 2 });
+	assert.deepEqual(delivered.c, [{ parts: [{ from: "main", content: "one" }, { from: "b", content: "two" }] }]);
+	assert.equal(e.get("b")?.pausedMidTurn, false);
+	assert.deepEqual(e.pausedAgents(), []);
+});
+
+test("an agent paused by its own parent stays paused across an ancestor's pause and resume", async () => {
+	const { e, delivered } = chain();
+	assert.deepEqual(e.pause(["b"]), ["b", "c"]);
+	assert.deepEqual(e.pause(["a"]), ["a"], "b and c were already stopped");
+	await e.route("main", "c", "later");
+	assert.deepEqual(e.resume(["a"]), { resumed: ["a"], interrupted: [], bufferedMessages: 0 });
+	assert.deepEqual(e.pausedAgents(), ["b", "c"], "b's own flag still holds b and c");
+	assert.deepEqual(delivered.c, []);
+	assert.deepEqual(e.resume(["b"]), { resumed: ["b", "c"], interrupted: [], bufferedMessages: 1 });
+	assert.deepEqual(delivered.c, [{ parts: [{ from: "main", content: "later" }] }]);
+});
+
+test("resuming a descendant an ancestor still holds clears its flag but releases nothing", async () => {
+	const { e, delivered } = chain();
+	e.pause(["b"]);
+	e.pause(["a"]);
+	await e.route("main", "b", "wait");
+	assert.deepEqual(e.resume(["b"]), { resumed: [], interrupted: [], bufferedMessages: 0 });
+	assert.equal(e.get("b")?.paused, false);
+	assert.deepEqual(e.pausedAgents(), ["a", "b", "c"], "a still holds its subtree");
+	assert.equal(e.events.at(-1)?.type, "resume", "a cleared flag is a change worth reporting");
+	assert.deepEqual(delivered.b, []);
+	assert.equal(e.get("b")?.pausedInbox?.length, 1, "the inbox waits for the agent to run again");
+	assert.deepEqual(e.resume(["a"]).resumed, ["a", "b", "c"]);
+	assert.equal(delivered.b.length, 1);
+});
+
+test("an agent spawned under a paused ancestor comes up paused", async () => {
+	const { e } = chain();
+	e.pause(["a"]);
+	assert.equal(e.reserve("d", "b").ok, true);
+	await e.route("b", "d", "first task");
+	const handed: RoutedAgentMessage[] = [];
+	e.attach("d", {
+		model: "test/m",
+		handle: {
+			deliver: async (message) => {
+				handed.push(message);
+			},
+			abort: async () => {},
+		},
+	});
+	assert.deepEqual(handed, [], "the reservation buffer joins the paused inbox instead");
+	assert.equal(e.recordTurnStart("d").abort, true);
+	assert.deepEqual(e.resume(["a"]).resumed, ["a", "b", "c", "d"]);
+	assert.deepEqual(handed, [{ parts: [{ from: "b", content: "first task" }] }]);
+});
+
+test("the spawn tree is derived from the live records", async () => {
+	// chain() registers through addAgent, the restore path, so restored parents are covered too.
+	const { e } = chain();
+	assert.deepEqual(e.getSpawnTree(), { a: "main", b: "a", c: "b" });
+	assert.equal(errorNotification({ name: "c", reason: "boom" }, e.getSpawnTree(), e.liveNames())?.to, "b");
+	await e.kill("b");
+	assert.deepEqual(e.getSpawnTree(), { a: "main" }, "killed agents leave no stale parent entries");
 });

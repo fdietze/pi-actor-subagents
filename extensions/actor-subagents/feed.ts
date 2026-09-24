@@ -3,7 +3,7 @@
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
 import type { OrderedAgent } from "./agent-order.ts";
-import { agentStatus, formatStatus } from "./agent-status.ts";
+import { type AgentStatus, formatStatus } from "./agent-status.ts";
 import type { AgentRecord, Reaction } from "./engine.ts";
 import { formatCustomStatus } from "./eta.ts";
 import { formatModelThinking } from "./thinking-level.ts";
@@ -38,6 +38,9 @@ function relTo(a: AgentRecord, viewer: string, viewerParent: string | undefined)
 export function formatSnapshot(
 	ordered: OrderedAgent<AgentRecord>[],
 	viewer: string,
+	// The effective status comes from the engine (Engine.status): a record alone cannot tell
+	// whether a paused ancestor holds it.
+	status: (a: AgentRecord) => AgentStatus,
 	now: number = Date.now(),
 ): string {
 	if (ordered.length === 0) return "no agents";
@@ -56,7 +59,7 @@ export function formatSnapshot(
 	// Custom status (with any ETA) shown right after the system status, matching the TUI roster ("idle · ...").
 	const statusOf = (a: AgentRecord) => {
 		const customDisplay = formatCustomStatus(a.customStatus, a.etaTs);
-		const label = formatStatus(agentStatus(a));
+		const label = formatStatus(status(a));
 		return customDisplay ? `${label} · ${customDisplay}` : label;
 	};
 	const widest = (lengths: number[], cap: number) => Math.min(cap, Math.max(...lengths));
@@ -154,7 +157,8 @@ export function formatMulticastResult(results: MulticastRouteOutcome[]): string 
 }
 
 export interface ResumeSummary {
-	wasPaused: boolean;
+	/** Agents that went from paused to running. */
+	resumed: string[];
 	bufferedMessages: number;
 	retriggered: number;
 }
@@ -162,15 +166,14 @@ export interface ResumeSummary {
 /**
  * Human-readable projection of the structured resume result.
  *
- * Resuming a swarm that was never paused does nothing at all — no inbox is released and no
- * agent is re-triggered. Reporting those zeros claimed work that did not happen, so that case
- * gets its own short line.
+ * A resume that set no agent running released no inbox and re-triggered nobody. Reporting those
+ * zeros would claim work that did not happen, so that case gets its own short line.
  */
 export function formatResumeSummary(summary: ResumeSummary): string {
-	if (!summary.wasPaused) return "agents already live · nothing to resume";
+	if (summary.resumed.length === 0) return "no agent resumed (none was paused, or a paused ancestor still holds it)";
 	const noun = summary.retriggered === 1 ? "agent" : "agents";
 	return [
-		"agents resumed",
+		`resumed ${summary.resumed.join(", ")}`,
 		`released ${summary.bufferedMessages} buffered messages`,
 		`retriggered ${summary.retriggered} interrupted ${noun}`,
 	].join(" · ");

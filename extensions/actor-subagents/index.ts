@@ -26,7 +26,6 @@ import {
 } from "./agent-message.ts";
 import { renderAgentMessage } from "./agent-message-renderer.ts";
 import { orderAgents } from "./agent-order.ts";
-import { agentStatus } from "./agent-status.ts";
 import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
 import { Engine, type AgentHandle } from "./engine.ts";
@@ -158,8 +157,10 @@ const RESUME_NUDGE = (now: Date) => {
 //      Existing sessions retain their subscribed closure across /reload, so a v24 engine must be
 //      shut down rather than keep emitting duplicate retry notifications.
 // v26: one kind of pause — restoredPause, pauseRestored(), isPaused() and PauseReason are gone;
-//      a restore pauses main's direct children with the ordinary per-agent flag. A v25 instance
-//      would keep a swarm-wide pause this code can no longer lift.
+//      a restore pauses main's direct children with the ordinary per-agent flag. The pause is
+//      derived (own flag or an ancestor's), resume returns the released/interrupted agents,
+//      Engine.status(rec) is the displayed status, and getSpawnTree() is derived from live
+//      records. A v25 instance would keep a swarm-wide pause this code can no longer lift.
 const ENGINE_KEY = "__subagentsEngine_v26";
 
 function getEngine(): Engine {
@@ -407,7 +408,7 @@ export default function subagents(pi: ExtensionAPI) {
           model: a.model,
           thinkingLevel: a.thinkingLevel,
           context: formatContext(a.view?.getContextUsage()),
-          status: agentStatus(a),
+          status: engine.status(a),
           customStatus: a.customStatus,
           etaTs: a.etaTs,
           targets: formatSendTargets(matrix, a.name, live),
@@ -416,7 +417,7 @@ export default function subagents(pi: ExtensionAPI) {
         { styleStatus: styler },
       ).map((line) => truncateToWidth(line, width));
       const running = background.filter(
-        (o) => agentStatus(o.agent).kind === "working",
+        (o) => engine.status(o.agent).kind === "working",
       ).length;
       const stateLine = swarmStateLine(running, engine.pausedAgents().length);
       const pauseLine = theme.bg("selectedBg", truncateToWidth(stateLine, width));
@@ -741,26 +742,15 @@ export default function subagents(pi: ExtensionAPI) {
     if (roots.length > 0) engine.pause(roots);
   };
 
-  // Shared by /subagents-resume and the resume_subagents tool: unpause the named agents (all of
-  // them when no names are given), release their buffered messages and re-trigger only the
-  // interrupted ones. Nothing is re-triggered when the resume did not happen (already live).
+  // Shared by /subagents-resume and the resume_subagents tool: clear the named agents' own pause
+  // (all of them when no names are given); the engine releases the buffered messages of every
+  // agent that thereby runs again, and only the interrupted ones among those are re-triggered.
   const resumeAgents = (names?: string[]): ResumeSummary => {
-    const wanted = names && names.length > 0 ? new Set(names) : undefined;
-    const interrupted = engine
-      .list()
-      .filter(
-        (a) => a.name !== "main" && a.pausedMidTurn && (!wanted || wanted.has(a.name)),
-      )
-      .map((a) => a.name);
-    const resumed = engine.resume(names);
-    if (!resumed.wasPaused) {
-      updateStatus();
-      return { ...resumed, retriggered: 0 };
-    }
+    const { resumed, interrupted, bufferedMessages } = engine.resume(names);
     const nudge = RESUME_NUDGE(new Date());
     for (const name of interrupted) void engine.route("main", name, nudge);
     updateStatus();
-    return { ...resumed, retriggered: interrupted.length };
+    return { resumed, bufferedMessages, retriggered: interrupted.length };
   };
 
   // Swarm control commands take an optional agent-name list; empty means "all of them".

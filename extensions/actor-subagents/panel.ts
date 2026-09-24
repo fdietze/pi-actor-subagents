@@ -28,7 +28,6 @@ import {
 import { AGENT_MESSAGE_CUSTOM_TYPE } from "./agent-message.ts";
 import { renderAgentMessage } from "./agent-message-renderer.ts";
 import { orderAgents } from "./agent-order.ts";
-import { agentStatus } from "./agent-status.ts";
 import type { Engine } from "./engine.ts";
 import {
 	formatContext,
@@ -382,7 +381,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 		},
 		render(width: number): string[] {
 			const lines: string[] = [];
-			const running = deps.engine.list().filter((a) => agentStatus(a).kind === "working").length;
+			const running = deps.engine.list().filter((a) => deps.engine.status(a).kind === "working").length;
 			const header = `─ subagents · ${agents().length}/${deps.engine.maxAgents} agents · ${running} running `;
 			lines.push(theme.fg("accent", truncateToWidth(header.padEnd(width, "─"), width)));
 			const styler = styleStatus(theme);
@@ -396,7 +395,7 @@ export function createSubagentsPanel(deps: PanelDeps, tui: TuiLike, theme: Theme
 					model: a.model,
 					thinkingLevel: a.thinkingLevel,
 					context: formatContext(a.view?.getContextUsage()),
-					status: agentStatus(a),
+					status: deps.engine.status(a),
 					customStatus: a.customStatus,
 					etaTs: a.etaTs,
 					targets: formatSendTargets(matrix, a.name, live),

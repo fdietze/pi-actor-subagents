@@ -105,8 +105,9 @@ export interface AgentRecord {
 	 */
 	pausedMidTurn?: boolean;
 	/**
-	 * Pause flag of THIS agent, set by pause() — by a command, a tool, or a restore. While set, its
-	 * turns are aborted and its incoming messages buffer in `pausedInbox`.
+	 * This agent's OWN pause flag, set by pause() and cleared by resume(). Whether the agent is
+	 * stopped is derived: it is paused while this flag is set on it or on any ancestor (see
+	 * Engine.pausedBy). Read the effective state through the engine, never from this field alone.
 	 */
 	paused?: boolean;
 	/** Reservation intermediate state: name taken, session still being created. */
@@ -131,8 +132,8 @@ export type AgentEvent =
 	// target session: the feed must not claim delivery for something that has not moved yet.
 	| { type: "route"; from: string; to: string; preview: string; buffered: boolean; ts: number }
 	| { type: "turn"; name: string; ts: number }
-	// `names` lists exactly the agents whose pause flag changed, so the feed never claims a stop
-	// that did not happen (The Map Is Not the Territory).
+	// `names` lists exactly the agents whose own pause flag changed, so the feed never claims a
+	// stop that did not happen (The Map Is Not the Territory).
 	| { type: "pause"; names: string[]; ts: number }
 	| { type: "resume"; names: string[]; ts: number }
 	| { type: "kill"; name: string; ts: number }
@@ -177,9 +178,12 @@ export type Reaction =
 	/** The agent no longer exists (killed while we waited); it has no status to report. */
 	| { observed: "gone" };
 
-/** Counts work released by resume without claiming asynchronous delivery completed. */
+/** Work released by resume, counted without claiming asynchronous delivery completed. */
 export interface EngineResumeResult {
-	wasPaused: boolean;
+	/** Agents that went from paused to running. */
+	resumed: string[];
+	/** The resumed agents that had been paused mid-turn: their work needs re-triggering. */
+	interrupted: string[];
 	bufferedMessages: number;
 }
 
@@ -201,7 +205,6 @@ export class Engine {
 	private readonly listeners = new Set<(e: AgentEvent) => void>();
 	// Graph tracking (in-memory, survives /reload via the singleton, resets on pi restart).
 	private readonly messageEdges = new Map<string, Map<string, number>>(); // from -> (to -> count)
-	private readonly spawnParent = new Map<string, string>(); // child -> parent (main = root, no entry)
 	private readonly caps: Caps;
 
 	// Note: no TS parameter properties — Node's strip-only mode (node --test on .ts)
@@ -269,7 +272,6 @@ export class Engine {
 		// Full clean slate for a re-spawned name: drop its old incoming + outgoing edges.
 		this.messageEdges.delete(name);
 		for (const targets of this.messageEdges.values()) targets.delete(name);
-		this.spawnParent.set(name, spawnerName);
 		const buffer: RoutedAgentMessage[] = [];
 		const record: AgentRecord = {
 			name,
@@ -433,23 +435,44 @@ export class Engine {
 		return all.filter((rec) => wanted.has(rec.name));
 	}
 
-	/** Names of the paused background agents. */
+	/** Names of the paused background agents (effective state, see pausedBy). */
 	pausedAgents(): string[] {
 		return this.background()
 			.filter((rec) => this.isAgentPaused(rec))
 			.map((rec) => rec.name);
 	}
 
+	/**
+	 * The single pause decision: the nearest agent — this one or an ancestor — whose own `paused`
+	 * flag holds `rec`, or undefined when it runs. Deriving the state instead of copying flags down
+	 * the tree keeps one source of truth: a subtree spawned or restored under a paused agent is
+	 * held without extra bookkeeping, and a flag set by a lower owner survives an ancestor's resume
+	 * (Correctness by Construction).
+	 *
+	 * The walk terminates because every `spawnedBy` names a live agent or 'main' and parents are
+	 * registered before their children, so the parent links cannot form a cycle.
+	 */
+	private pausedBy(rec: AgentRecord): string | undefined {
+		for (let cur: AgentRecord | undefined = rec; cur && cur.name !== "main"; cur = this.agents.get(cur.spawnedBy)) {
+			if (cur.paused) return cur.name;
+		}
+		return undefined;
+	}
+
 	/** Is this agent stopped? Blocks its turns and buffers its incoming messages. */
 	private isAgentPaused(rec: AgentRecord): boolean {
-		return rec.paused === true;
+		return this.pausedBy(rec) !== undefined;
+	}
+
+	/** The agent's status with its effective pause state folded in; the only status to display. */
+	status(rec: AgentRecord): AgentStatus {
+		return agentStatus({ ...rec, paused: this.isAgentPaused(rec) });
 	}
 
 	/** The agent's status as the engine sees it, with its pause state folded in. */
 	statusOf(name: string): AgentStatus | undefined {
 		const rec = this.agents.get(name);
-		if (!rec) return undefined;
-		return agentStatus({ ...rec, paused: this.isAgentPaused(rec) });
+		return rec ? this.status(rec) : undefined;
 	}
 
 	/**
@@ -510,40 +533,56 @@ export class Engine {
 		});
 	}
 
-	/**
-	 * Pause agents — all background agents when no names are given, otherwise exactly the named
-	 * ones. Returns the agents that were not already paused, so the caller can abort their running
-	 * turns. Marks whoever is mid-turn as `pausedMidTurn` so resume re-triggers that interrupted
-	 * work; idle agents are left alone. Pausing everything covers the agents that exist NOW (a
-	 * still-pending reservation included); an agent spawned afterwards starts live.
-	 *
-	 * Nothing paused means no event: a mistyped or already-paused name must not show up in the
-	 * feed as a pause that happened.
-	 */
-	pause(names?: string[]): string[] {
-		const newlyPaused: string[] = [];
-		for (const rec of this.background(names)) {
-			if (rec.paused) continue;
-			rec.paused = true;
-			newlyPaused.push(rec.name);
-			// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
-			if (rec.activity !== undefined) rec.pausedMidTurn = true;
-		}
-		if (newlyPaused.length > 0) this.emit({ type: "pause", names: newlyPaused, ts: Date.now() });
-		return newlyPaused;
+	/** Names of the background agents that are effectively paused right now. */
+	private pausedSet(): Set<string> {
+		return new Set(this.pausedAgents());
 	}
 
 	/**
-	 * Resume agents — all paused background agents when no names are given, otherwise the named
-	 * ones. It is a no-op when none of them is paused.
+	 * Pause agents — all background agents when no names are given, otherwise the named ones — by
+	 * setting their own flag. Returns every agent that went from running to paused, which is the
+	 * named agents plus their subtrees, so the caller can abort exactly those turns. Whoever of them
+	 * is mid-turn is marked `pausedMidTurn` so resume re-triggers that interrupted work.
+	 *
+	 * Nothing flagged means no event: a mistyped or already-paused name must not show up in the
+	 * feed as a pause that happened.
+	 */
+	pause(names?: string[]): string[] {
+		const before = this.pausedSet();
+		const flagged: string[] = [];
+		for (const rec of this.background(names)) {
+			if (rec.paused) continue;
+			rec.paused = true;
+			flagged.push(rec.name);
+		}
+		if (flagged.length === 0) return [];
+		const newlyPaused = this.background().filter((rec) => !before.has(rec.name) && this.isAgentPaused(rec));
+		// A set activity IS "mid-turn" — that is exactly whose work resume must re-trigger.
+		for (const rec of newlyPaused) if (rec.activity !== undefined) rec.pausedMidTurn = true;
+		this.emit({ type: "pause", names: flagged, ts: Date.now() });
+		return newlyPaused.map((rec) => rec.name);
+	}
+
+	/**
+	 * Resume agents — all background agents when no names are given, otherwise the named ones — by
+	 * clearing only their own flag. Every agent that thereby went from paused to running gets its
+	 * buffered inbox released as one ordered batch; an agent still held by another flag (its own or
+	 * an ancestor's) stays paused and keeps its inbox. `interrupted` lists the released agents that
+	 * were paused mid-turn, for the caller to re-trigger.
+	 *
+	 * Nothing cleared means no event and an empty result.
 	 */
 	resume(names?: string[]): EngineResumeResult {
-		const released = this.background(names).filter((rec) => rec.paused === true);
-		if (released.length === 0) return { wasPaused: false, bufferedMessages: 0 };
+		const before = this.pausedSet();
+		const cleared = this.background(names).filter((rec) => rec.paused === true);
+		if (cleared.length === 0) return { resumed: [], interrupted: [], bufferedMessages: 0 };
+		for (const rec of cleared) rec.paused = false;
 
+		const released = this.background().filter((rec) => before.has(rec.name) && !this.isAgentPaused(rec));
+		const interrupted: string[] = [];
 		let bufferedMessages = 0;
 		for (const rec of released) {
-			rec.paused = false;
+			if (rec.pausedMidTurn) interrupted.push(rec.name);
 			rec.pausedMidTurn = false;
 			// Release paused inboxes in FIFO order. Delivery is intentionally fire-and-forget,
 			// so the result counts released messages rather than claiming they completed.
@@ -557,8 +596,8 @@ export class Engine {
 			}
 		}
 
-		this.emit({ type: "resume", names: released.map((rec) => rec.name), ts: Date.now() });
-		return { wasPaused: true, bufferedMessages };
+		this.emit({ type: "resume", names: cleared.map((rec) => rec.name), ts: Date.now() });
+		return { resumed: released.map((rec) => rec.name), interrupted, bufferedMessages };
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {
@@ -631,9 +670,13 @@ export class Engine {
 		return out;
 	}
 
-	/** Spawn tree as child -> parent. Plain snapshot copy ('main' has no parent). */
+	/**
+	 * Spawn tree of the live agents as child -> parent ('main' has no parent). Derived from each
+	 * record's `spawnedBy`, the one parent representation (DRY), so it cannot drift from the
+	 * records the pause and kill walks read.
+	 */
 	getSpawnTree(): Record<string, string> {
-		return Object.fromEntries(this.spawnParent);
+		return Object.fromEntries(this.background().map((rec) => [rec.name, rec.spawnedBy]));
 	}
 
 	/**

@@ -7,7 +7,7 @@ import {
 	formatKillResult,
 	formatResumeSummary,
 } from "./feed.ts";
-import type { AgentStatus } from "./agent-status.ts";
+import { type AgentStatus, agentStatus } from "./agent-status.ts";
 import type { AgentRecord, Reaction } from "./engine.ts";
 import type { OrderedAgent } from "./agent-order.ts";
 
@@ -28,7 +28,7 @@ const rec = (over: Partial<AgentRecord>): AgentRecord => ({
 const flat = (agents: AgentRecord[]): OrderedAgent<AgentRecord>[] =>
 	agents.map((agent) => ({ agent, depth: agent.name === "main" ? 0 : 1 }));
 const snapshot = (agents: AgentRecord[], viewer: string, now?: number): string =>
-	formatSnapshot(flat(agents), viewer, now);
+	formatSnapshot(flat(agents), viewer, agentStatus, now);
 
 test("formatSnapshot lists each agent with status and turns", () => {
 	const agents = [
@@ -190,17 +190,17 @@ test("formatMulticastResult reports each receiver state a delivered message can 
 
 test("formatResumeSummary reports released buffer and retriggers, or why nothing happened", () => {
 	assert.equal(
-		formatResumeSummary({ wasPaused: true, bufferedMessages: 2, retriggered: 1 }),
-		"agents resumed · released 2 buffered messages · retriggered 1 interrupted agent",
+		formatResumeSummary({ resumed: ["a", "b"], bufferedMessages: 2, retriggered: 1 }),
+		"resumed a, b · released 2 buffered messages · retriggered 1 interrupted agent",
 	);
-	// A live swarm is not resumed at all: reporting zeros would claim work that did not happen.
+	// Nothing set running: reporting zeros would claim work that did not happen.
 	assert.equal(
-		formatResumeSummary({ wasPaused: false, bufferedMessages: 0, retriggered: 0 }),
-		"agents already live · nothing to resume",
+		formatResumeSummary({ resumed: [], bufferedMessages: 0, retriggered: 0 }),
+		"no agent resumed (none was paused, or a paused ancestor still holds it)",
 	);
 	assert.equal(
-		formatResumeSummary({ wasPaused: true, bufferedMessages: 0, retriggered: 0 }),
-		"agents resumed · released 0 buffered messages · retriggered 0 interrupted agents",
+		formatResumeSummary({ resumed: ["a"], bufferedMessages: 0, retriggered: 0 }),
+		"resumed a · released 0 buffered messages · retriggered 0 interrupted agents",
 	);
 });
 
@@ -235,6 +235,7 @@ test("formatSnapshot indents each agent by its spawn-tree depth", () => {
 			{ agent: rec({ name: "helper", spawnedBy: "lead" }), depth: 2 },
 		],
 		"main",
+		agentStatus,
 	).split("\n");
 	assert.match(out[1], /^ {2}main /);
 	assert.match(out[2], /^ {3}lead /);
@@ -248,6 +249,7 @@ test("formatSnapshot keeps the columns aligned across indent levels", () => {
 			{ agent: rec({ name: "deep", spawnedBy: "lead" }), depth: 3 },
 		],
 		"main",
+		agentStatus,
 	).split("\n").slice(1);
 	assert.equal(rows[0].indexOf("turns:"), rows[1].indexOf("turns:"));
 });

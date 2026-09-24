@@ -289,7 +289,7 @@ export function makeAgentTools(
           content: [
             {
               type: "text",
-              text: formatSnapshot(ordered, selfName),
+              text: formatSnapshot(ordered, selfName, (a) => engine.status(a)),
             },
           ],
           details: {},
