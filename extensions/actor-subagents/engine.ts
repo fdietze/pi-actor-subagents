@@ -16,7 +16,7 @@ import type { AgentHandle, AgentRecord, AgentTuning, AgentView, ModelChange } fr
 import { type AgentActivity, type AgentStatus, agentStatus, type StopReason } from "./agent-status.ts";
 import type { CheckResult, ControlResult, EngineResumeResult, TargetOutcome } from "./control-result.ts";
 import type { Caps } from "./settings.ts";
-import { childrenOf, nearest, pausedBy, subtreePostOrder } from "./spawn-tree.ts";
+import { childrenOf, pausedBy, subtreePostOrder } from "./spawn-tree.ts";
 import type { ThinkingLevel } from "./thinking-level.ts";
 
 export type RetuneResult = { ok: true; tuning: AgentTuning } | { ok: false; reason: string };
@@ -196,7 +196,7 @@ export class Engine {
 		// A pause can land while the session is being created. Handing the reservation's messages to
 		// a paused agent would start a turn that recordTurnStart aborts, leaving them unread with
 		// nobody to re-trigger — so they join the paused inbox, ahead of anything buffered later.
-		if (this.isAgentPaused(rec)) rec.pausedInbox = [...buffered, ...(rec.pausedInbox ?? [])];
+		if (this.isStopped(rec)) rec.pausedInbox = [...buffered, ...(rec.pausedInbox ?? [])];
 		else for (const t of buffered) void opts.handle.deliver(t);
 	}
 
@@ -336,9 +336,19 @@ export class Engine {
 			.map((rec) => rec.name);
 	}
 
-	/** Is this agent stopped? Blocks its turns and buffers its incoming messages. */
+	/** Is this agent paused — its own or an ancestor's flag? The state users see and control. */
 	private isAgentPaused(rec: AgentRecord): boolean {
 		return pausedBy(this.agents, rec) !== undefined;
+	}
+
+	/**
+	 * Is this agent stopped: paused, OR an abort we started is still in flight? The single gate
+	 * for delivery and turns. It is wider than paused because a resume takes effect at call time
+	 * while the agent's abort may still be landing; a message or turn let through in that window
+	 * would be killed by the late abort. The waiting resume releases what buffered meanwhile.
+	 */
+	private isStopped(rec: AgentRecord): boolean {
+		return this.isAgentPaused(rec) || this.aborts.pending((name) => name === rec.name).length > 0;
 	}
 
 	/** The agent's status with its effective pause state folded in; the only status to display. */
@@ -458,23 +468,18 @@ export class Engine {
 	 * says so. `interrupted` lists the released agents that were paused mid-turn, for the caller to
 	 * re-trigger.
 	 *
-	 * It first waits for the outstanding pause aborts of exactly the agents it will release, so the
-	 * typical "pause, correct via send_message, resume" sequence cannot have a late abort kill the
-	 * resumed turn (Inversion), while a slow abort of an agent that stays paused — elsewhere, or
-	 * under a lower owner's own flag — cannot hold this resume hostage. The decision itself runs synchronously after that wait, on the state as it
-	 * is then.
+	 * The resume takes effect at call time: flags, `affected` and the event are decided
+	 * synchronously, so pause and resume calls linearize in call order (Correctness by
+	 * Construction). Only the side effects — inbox release and `interrupted` — wait for the
+	 * released agents' outstanding aborts, so the typical "pause, correct via send_message,
+	 * resume" sequence cannot have a late abort kill the resumed turn (Inversion). They then apply
+	 * to the agents still running at that point: one paused again meanwhile keeps its inbox and
+	 * its pausedMidTurn mark for the next resume. A slow abort of an agent that stays paused cannot
+	 * hold this resume up.
 	 *
 	 * Nothing cleared means no event.
 	 */
 	async resume(by: string, names?: string[]): Promise<EngineResumeResult> {
-		// No await between the last scan and the decision below: a pause landing in such a gap
-		// would have its fresh flag cleared while its abort is still in flight. With nothing
-		// pending the whole resume runs synchronously, in call order.
-		for (;;) {
-			const pending = this.pendingAborts(new Set(this.controlTargets(by, names).recs.map((rec) => rec.name)));
-			if (pending.length === 0) break;
-			await Promise.all(pending);
-		}
 		const { results, recs } = this.controlTargets(by, names);
 		const before = this.pausedSet();
 		const cleared = recs.filter((rec) => rec.paused === true);
@@ -487,9 +492,21 @@ export class Engine {
 		if (cleared.length === 0) return { results, affected: [], interrupted: [], bufferedMessages: 0 };
 
 		const released = this.background().filter((rec) => before.has(rec.name) && !this.isAgentPaused(rec));
+		this.emit({ type: "resume", names: cleared.map((rec) => rec.name), ts: Date.now() });
+
+		// The released agents that still run now: not killed (or respawned) and not paused again.
+		const running = () => released.filter((rec) => this.agents.get(rec.name) === rec && !this.isAgentPaused(rec));
+		// Re-scan after every wait: a pause and resume in between can start a new abort. No await
+		// follows the last scan, so nothing can land between it and the release below.
+		for (;;) {
+			const names = new Set(running().map((rec) => rec.name));
+			const pending = this.aborts.pending((name) => names.has(name));
+			if (pending.length === 0) break;
+			await Promise.all(pending);
+		}
 		const interrupted: string[] = [];
 		let bufferedMessages = 0;
-		for (const rec of released) {
+		for (const rec of running()) {
 			if (rec.pausedMidTurn) interrupted.push(rec.name);
 			rec.pausedMidTurn = false;
 			// Release paused inboxes in FIFO order. Delivery is intentionally fire-and-forget,
@@ -504,21 +521,7 @@ export class Engine {
 			}
 		}
 
-		this.emit({ type: "resume", names: cleared.map((rec) => rec.name), ts: Date.now() });
 		return { results, affected: released.map((rec) => rec.name), interrupted, bufferedMessages };
-	}
-
-	/**
-	 * The aborts in flight for agents that clearing the flags of `targets` would set running: paused
-	 * now, but by no flag outside `targets`.
-	 */
-	private pendingAborts(targets: ReadonlySet<string>): Promise<void>[] {
-		const wouldRun = (rec: AgentRecord) =>
-			this.isAgentPaused(rec) && !nearest(this.agents, rec, (cur) => cur.paused === true && !targets.has(cur.name));
-		return this.aborts.pending((name) => {
-			const rec = this.agents.get(name);
-			return rec !== undefined && wouldRun(rec);
-		});
 	}
 
 	async route(from: string, to: string, content: string): Promise<RouteResult> {
@@ -530,7 +533,7 @@ export class Engine {
 		// The pause state is read ONCE, before the delivery await, and the reported outcome comes from
 		// that same decision: a pause landing while `deliver` is in flight must not turn a message the
 		// session already has into a "buffered" report (the map has to match what actually happened).
-		const paused = this.isAgentPaused(target);
+		const paused = this.isStopped(target);
 		if (paused) (target.pausedInbox ??= []).push(message);
 		else await target.handle.deliver(message);
 		target.lastActivity = Date.now();
@@ -554,6 +557,8 @@ export class Engine {
 		if (!target.handle.deliverUser) return { outcome: "refused", reason: `'${to}' is still spawning` };
 		if (this.isAgentPaused(target))
 			return { outcome: "refused", reason: `'${to}' is paused — resume it first` };
+		if (this.isStopped(target))
+			return { outcome: "refused", reason: `'${to}' is still stopping — try again in a moment` };
 		void target.handle.deliverUser(text).catch((error) => {
 			this.reportError(to, error instanceof Error ? error.message : String(error));
 		});
@@ -607,7 +612,7 @@ export class Engine {
 	 */
 	recordTurnStart(name: string): { abort: boolean; reason?: string } {
 		const rec = this.agents.get(name);
-		if (rec && this.isAgentPaused(rec)) return { abort: true, reason: "agents paused" };
+		if (rec && this.isStopped(rec)) return { abort: true, reason: "agents paused" };
 		if (rec) {
 			rec.turns++;
 			rec.lastActivity = Date.now();

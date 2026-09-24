@@ -1090,7 +1090,11 @@ test("resume waits for a pause's abort to finish before the agent runs again", a
 	const resumed = e.resume("main", ["w"]);
 	await new Promise((resolve) => setTimeout(resolve, 10));
 	assert.deepEqual(log, [], "nothing is released while the abort is still running");
-	assert.deepEqual(e.pausedAgents(), ["w"]);
+	// The resume already took effect in call order; only its side effects wait.
+	assert.deepEqual(e.pausedAgents(), []);
+	// A message arriving meanwhile waits too: a live delivery would start a turn the late abort kills.
+	assert.deepEqual(await e.route("main", "w", "meanwhile"), { outcome: "buffered" });
+	assert.equal(e.recordTurnStart("w").abort, true, "no turn starts while our abort is in flight");
 	finishAbort?.();
 	assert.deepEqual((await resumed).affected, ["w"]);
 	assert.deepEqual(log, ["aborted", "delivered"], "the late abort cannot hit the resumed turn");
@@ -1152,4 +1156,37 @@ test("a pause issued right after a resume wins, and its abort is not undone", as
 	e.pause("main", ["a"]); // same tick, its abort never finishes
 	assert.deepEqual((await resumed).affected, []);
 	assert.deepEqual(e.pausedAgents(), ["a"], "call order holds: resume, then pause");
+});
+
+test("a pause racing an in-flight resume wins in call order", async () => {
+	// The live repro: pause, resume, pause issued together while beta's bash abort takes seconds.
+	const e = new Engine(caps);
+	const delivered: RoutedAgentMessage[] = [];
+	const aborts: (() => void)[] = [];
+	e.addAgent({
+		...mainRecord(),
+		name: "beta",
+		depth: 1,
+		activity: "tool",
+		handle: {
+			deliver: async (message) => {
+				delivered.push(message);
+			},
+			abort: () => new Promise<void>((resolve) => aborts.push(resolve)),
+		},
+	});
+	assert.deepEqual(e.pause("main", ["beta"]).affected, ["beta"]);
+	await e.route("main", "beta", "buffered while paused");
+	const resumed = e.resume("main", ["beta"]);
+	assert.deepEqual(e.pause("main", ["beta"]).affected, ["beta"], "the resume already cleared the flag: this pause acts");
+	for (const finish of aborts) finish();
+	const result = await resumed;
+	assert.deepEqual(result.affected, ["beta"], "the resume happened, before the pause");
+	assert.deepEqual({ interrupted: result.interrupted, bufferedMessages: result.bufferedMessages }, { interrupted: [], bufferedMessages: 0 });
+	assert.deepEqual(e.pausedAgents(), ["beta"], "the last call was a pause");
+	assert.deepEqual(delivered, [], "the paused agent keeps its inbox");
+	assert.equal(e.get("beta")?.pausedInbox?.length, 1);
+	assert.equal(e.get("beta")?.pausedMidTurn, true, "its interrupted work is still marked for the next resume");
+	const next = await e.resume("main", ["beta"]);
+	assert.deepEqual({ interrupted: next.interrupted, bufferedMessages: next.bufferedMessages }, { interrupted: ["beta"], bufferedMessages: 1 });
 });
