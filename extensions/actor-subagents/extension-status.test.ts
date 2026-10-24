@@ -43,9 +43,26 @@ test("withExtensionStatus ignores malformed input from untyped extensions", () =
 });
 
 test("formatting sorts by key: plain values for the roster, key: value for the LLM", () => {
-	const s = { zeta: "z", "bash-async": "⏳2" };
+	const s = withExtensionStatus(withExtensionStatus({}, "zeta", "z"), "bash-async", "⏳2");
 	assert.equal(formatExtensionStatuses(s), "⏳2 z");
 	assert.equal(describeExtensionStatuses(s), "bash-async: ⏳2, zeta: z");
 	assert.equal(formatExtensionStatuses(undefined), "");
 	assert.equal(describeExtensionStatuses({}), "");
+});
+
+test("withExtensionStatus ignores keys outside allowedKeys", () => {
+	const allowed = ["bash-async"];
+	const s = withExtensionStatus({}, "bash-async", "⏳1", allowed);
+	assert.deepEqual(s, { "bash-async": "⏳1" });
+	assert.equal(withExtensionStatus(s, "mcp", "MCP 0/4", allowed), s);
+	const empty = {};
+	assert.equal(withExtensionStatus(empty, "bash-async", "⏳1", []), empty, "an empty list shows nothing");
+	assert.deepEqual(withExtensionStatus(s, "bash-async", undefined, allowed), {});
+});
+
+test("with allowedKeys, entries keep the allowlist's order", () => {
+	const allowed = ["zeta", "bash-async"];
+	const s = withExtensionStatus(withExtensionStatus({}, "bash-async", "⏳2", allowed), "zeta", "z", allowed);
+	assert.equal(formatExtensionStatuses(s), "z ⏳2");
+	assert.equal(describeExtensionStatuses(withExtensionStatus(s, "bash-async", "⏳3", allowed)), "zeta: z, bash-async: ⏳3");
 });

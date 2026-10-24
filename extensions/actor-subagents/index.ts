@@ -495,6 +495,7 @@ export default function subagents(pi: ExtensionAPI) {
     const childSettings = SettingsManager.inMemory(
       realSettings.getGlobalSettings(),
     );
+    const settings = readSettings();
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: realAgentDir,
@@ -508,7 +509,7 @@ export default function subagents(pi: ExtensionAPI) {
       // Re-read per spawn (unlike the caps), so revoking a capability takes effect on the
       // next child rather than at the next pi start.
       noExtensions: true,
-      additionalExtensionPaths: readSettings().childExtensions,
+      additionalExtensionPaths: settings.childExtensions,
       extensionFactories: [
         { name: "subagent-timestamps", factory: registerToolTimestamps },
       ],
@@ -563,7 +564,7 @@ export default function subagents(pi: ExtensionAPI) {
     // write from a killed child can never reach a re-spawned agent of the same name.
     let extensionStatuses: ExtensionStatuses = {};
     const uiContext = headlessUiContext(session.extensionRunner, (key, text) => {
-      const next = withExtensionStatus(extensionStatuses, key, text);
+      const next = withExtensionStatus(extensionStatuses, key, text, settings.extensionStatusKeys);
       if (next === extensionStatuses) return;
       extensionStatuses = next;
       // Writes arrive outside any tool call (job timers, session_start), so redraw here.

@@ -19,6 +19,8 @@ export interface Settings {
 	caps: Caps;
 	/** Extension paths loaded into every child session, on top of its always-on tools. */
 	childExtensions: string[];
+	/** Extension status keys shown for children; undefined shows every key. */
+	extensionStatusKeys: string[] | undefined;
 }
 
 /** Applied per field, so an unset or invalid single cap does not disturb the others. */
@@ -38,9 +40,15 @@ function childExtensions(value: unknown): string[] {
 	return value;
 }
 
+// Display-only, so an invalid value falls back to the default (every key) like the caps do.
+function extensionStatusKeys(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	return value.every((entry) => typeof entry === "string" && entry.length > 0) ? value : undefined;
+}
+
 /**
  * Parses the settings file's contents; unparseable text is treated as an empty file.
- * The file is flat (all three keys at the top level) because it is hand-edited; the `caps`
+ * The file is flat (all keys at the top level) because it is hand-edited; the `caps`
  * grouping exists only in the type, where it is what the engine is constructed from.
  */
 export function parseSettings(json: string): Settings {
@@ -57,5 +65,6 @@ export function parseSettings(json: string): Settings {
 			maxSpawnDepth: positiveInt(value?.maxSpawnDepth, DEFAULT_CAPS.maxSpawnDepth),
 		},
 		childExtensions: childExtensions(value?.childExtensions),
+		extensionStatusKeys: extensionStatusKeys(value?.extensionStatusKeys),
 	};
 }

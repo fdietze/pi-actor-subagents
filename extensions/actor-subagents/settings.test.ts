@@ -4,7 +4,11 @@ import { DEFAULT_CAPS, parseSettings } from "./settings.ts";
 
 test("an empty or unreadable settings file yields the defaults and no child extensions", () => {
 	for (const input of ["", "not json", "{}", "null", "[]"]) {
-		assert.deepEqual(parseSettings(input), { caps: DEFAULT_CAPS, childExtensions: [] }, input);
+		assert.deepEqual(
+			parseSettings(input),
+			{ caps: DEFAULT_CAPS, childExtensions: [], extensionStatusKeys: undefined },
+			input,
+		);
 	}
 });
 
@@ -48,6 +52,16 @@ test("child extensions fail closed for missing, malformed, or mixed entries", ()
 test("valid caps and child extensions are read from the same file", () => {
 	assert.deepEqual(
 		parseSettings(JSON.stringify({ maxAgents: 3, childExtensions: ["/one.ts"] })),
-		{ caps: { ...DEFAULT_CAPS, maxAgents: 3 }, childExtensions: ["/one.ts"] },
+		{ caps: { ...DEFAULT_CAPS, maxAgents: 3 }, childExtensions: ["/one.ts"], extensionStatusKeys: undefined },
 	);
+});
+
+test("extension status keys are a list of non-empty strings, otherwise every key is shown", () => {
+	assert.deepEqual(parseSettings(JSON.stringify({ extensionStatusKeys: ["bash-async"] })).extensionStatusKeys, [
+		"bash-async",
+	]);
+	assert.deepEqual(parseSettings(JSON.stringify({ extensionStatusKeys: [] })).extensionStatusKeys, []);
+	for (const extensionStatusKeys of ["bash-async", [""], [1], null]) {
+		assert.equal(parseSettings(JSON.stringify({ extensionStatusKeys })).extensionStatusKeys, undefined);
+	}
 });
