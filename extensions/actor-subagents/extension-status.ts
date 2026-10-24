@@ -35,8 +35,7 @@ export function sanitizeStatusText(text: string): string {
  * renders hold a snapshot safely. Text that is empty after sanitizing clears the key, like
  * `undefined` does. Both arguments come from untyped extension code, so non-strings are treated
  * as a clear (text) or ignored (key), and the key is sanitized too: it reaches the LLM listing.
- * With `allowedKeys` (the `extensionStatusKeys` setting), every other key is ignored and the
- * entries are kept in the allowlist's order instead of sorted by key.
+ * With `allowedKeys` (the `childExtensionStatusKeys` setting), every other key is ignored.
  */
 export function withExtensionStatus(
 	statuses: ExtensionStatuses,
@@ -52,19 +51,15 @@ export function withExtensionStatus(
 		const { [key]: _removed, ...rest } = statuses;
 		return rest;
 	}
-	if (statuses[key] === value) return statuses;
-	// The display order is fixed here, once per change: allowlist order if given, else by key.
-	// shortcut: integer-like keys ("1") always sort first in a JS object; use a Map if one appears.
-	const entries = [...Object.entries(statuses).filter(([k]) => k !== key), [key, value] as const];
-	entries.sort(([a], [b]) =>
-		allowedKeys ? allowedKeys.indexOf(a) - allowedKeys.indexOf(b) : a.localeCompare(b),
-	);
-	return Object.fromEntries(entries);
+	return statuses[key] === value ? statuses : { ...statuses, [key]: value };
 }
 
-/** Roster cell: values in stored order joined by spaces, like Pi's own footer status line. */
+const byKey = (statuses: ExtensionStatuses) =>
+	Object.entries(statuses).sort(([a], [b]) => a.localeCompare(b));
+
+/** Roster cell: values sorted by key and joined by spaces, like Pi's own footer status line. */
 export function formatExtensionStatuses(statuses: ExtensionStatuses | undefined): string {
-	return statuses ? Object.entries(statuses).map(([, text]) => text).join(" ") : "";
+	return statuses ? byKey(statuses).map(([, text]) => text).join(" ") : "";
 }
 
 /**
@@ -72,5 +67,5 @@ export function formatExtensionStatuses(statuses: ExtensionStatuses | undefined)
  * the name of the extension that set it.
  */
 export function describeExtensionStatuses(statuses: ExtensionStatuses | undefined): string {
-	return statuses ? Object.entries(statuses).map(([key, text]) => `${key}: ${text}`).join(", ") : "";
+	return statuses ? byKey(statuses).map(([key, text]) => `${key}: ${text}`).join(", ") : "";
 }

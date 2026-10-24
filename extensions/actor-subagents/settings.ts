@@ -1,12 +1,14 @@
 /**
  * Parse the extension's single settings file (see index.ts for its location).
  *
- * The two fields deliberately fail in opposite directions:
+ * Each field fails in the direction its risk calls for:
  * - `caps` are ergonomic limits, so a missing or nonsensical field falls back to its default
  *   and a partial file still works. Refusing to run over a typo'd number helps nobody.
  * - `childExtensions` grants foreign code the child sessions' full process authority, so it is
  *   fail-closed: anything that is not exactly a list of non-empty strings grants nothing
  *   (Inversion — the failure to design out is "unreadable file silently loads something").
+ * - `childExtensionStatusKeys` is display-only, so it fails open: anything that is not exactly a
+ *   list of non-empty strings shows every key, as if unset.
  */
 
 /** Numeric limits of one swarm. */
@@ -19,8 +21,8 @@ export interface Settings {
 	caps: Caps;
 	/** Extension paths loaded into every child session, on top of its always-on tools. */
 	childExtensions: string[];
-	/** Extension status keys shown for children; undefined shows every key. */
-	extensionStatusKeys: string[] | undefined;
+	/** Child extension status keys kept for display; undefined keeps every key. */
+	childExtensionStatusKeys: string[] | undefined;
 }
 
 /** Applied per field, so an unset or invalid single cap does not disturb the others. */
@@ -40,8 +42,7 @@ function childExtensions(value: unknown): string[] {
 	return value;
 }
 
-// Display-only, so an invalid value falls back to the default (every key) like the caps do.
-function extensionStatusKeys(value: unknown): string[] | undefined {
+function childExtensionStatusKeys(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	return value.every((entry) => typeof entry === "string" && entry.length > 0) ? value : undefined;
 }
@@ -65,6 +66,6 @@ export function parseSettings(json: string): Settings {
 			maxSpawnDepth: positiveInt(value?.maxSpawnDepth, DEFAULT_CAPS.maxSpawnDepth),
 		},
 		childExtensions: childExtensions(value?.childExtensions),
-		extensionStatusKeys: extensionStatusKeys(value?.extensionStatusKeys),
+		childExtensionStatusKeys: childExtensionStatusKeys(value?.childExtensionStatusKeys),
 	};
 }

@@ -564,7 +564,7 @@ export default function subagents(pi: ExtensionAPI) {
     // write from a killed child can never reach a re-spawned agent of the same name.
     let extensionStatuses: ExtensionStatuses = {};
     const uiContext = headlessUiContext(session.extensionRunner, (key, text) => {
-      const next = withExtensionStatus(extensionStatuses, key, text, settings.extensionStatusKeys);
+      const next = withExtensionStatus(extensionStatuses, key, text, settings.childExtensionStatusKeys);
       if (next === extensionStatuses) return;
       extensionStatuses = next;
       // Writes arrive outside any tool call (job timers, session_start), so redraw here.
