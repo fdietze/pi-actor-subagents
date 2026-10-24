@@ -35,14 +35,16 @@ export function sanitizeStatusText(text: string): string {
  * renders hold a snapshot safely. Text that is empty after sanitizing clears the key, like
  * `undefined` does. Both arguments come from untyped extension code, so non-strings are treated
  * as a clear (text) or ignored (key), and the key is sanitized too: it reaches the LLM listing.
+ * With `allowedKeys` (the `childExtensionStatusKeys` setting), every other key is ignored.
  */
 export function withExtensionStatus(
 	statuses: ExtensionStatuses,
 	rawKey: unknown,
 	text: unknown,
+	allowedKeys?: readonly string[],
 ): ExtensionStatuses {
 	const key = typeof rawKey === "string" ? sanitizeStatusText(rawKey) : "";
-	if (key === "") return statuses;
+	if (key === "" || (allowedKeys && !allowedKeys.includes(key))) return statuses;
 	const value = typeof text === "string" ? sanitizeStatusText(text) : "";
 	if (value === "") {
 		if (!(key in statuses)) return statuses;

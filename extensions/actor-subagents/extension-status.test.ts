@@ -49,3 +49,13 @@ test("formatting sorts by key: plain values for the roster, key: value for the L
 	assert.equal(formatExtensionStatuses(undefined), "");
 	assert.equal(describeExtensionStatuses({}), "");
 });
+
+test("withExtensionStatus ignores keys outside allowedKeys", () => {
+	const allowed = ["bash-async"];
+	const s = withExtensionStatus({}, "bash-async", "⏳1", allowed);
+	assert.deepEqual(s, { "bash-async": "⏳1" });
+	assert.equal(withExtensionStatus(s, "mcp", "MCP 0/4", allowed), s);
+	const empty = {};
+	assert.equal(withExtensionStatus(empty, "bash-async", "⏳1", []), empty, "an empty list shows nothing");
+	assert.deepEqual(withExtensionStatus(s, "bash-async", undefined, allowed), {});
+});
