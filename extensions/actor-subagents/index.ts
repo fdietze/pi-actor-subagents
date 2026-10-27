@@ -27,6 +27,7 @@ import { renderAgentMessage } from "./agent-message-renderer.ts";
 import { orderAgents } from "./agent-order.ts";
 import { agentSystemPrompt } from "./agent-system-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
+import { installApi, restoreToolGuard } from "./api.ts";
 import type { AgentHandle } from "./agent-record.ts";
 import type { EngineResumeResult } from "./control-result.ts";
 import { authorityOf } from "./authorize.ts";
@@ -67,6 +68,7 @@ import {
 } from "./spawner.ts";
 import type { ThinkingLevel } from "./thinking-level.ts";
 import { timestampToolResult } from "./tool-timestamp.ts";
+import { childToolOptions, type ToolGuard } from "./tool-guard.ts";
 
 /**
  * Gives one session a sense of elapsed time by stamping the wall-clock start and finish times
@@ -171,7 +173,12 @@ const RESUME_NUDGE = (now: Date, by: string) => {
 //      append/busy). A v26 instance would treat a string flag as foreign and lack these methods.
 // v28: terminal errors route actionable scheduler messages instead of silent notices; v27
 //      would retain the old announce/route methods after /reload and never wake a parent.
-const ENGINE_KEY = "__subagentsEngine_v28";
+// v29: records carry sessionId and the spawn policy's state (policyMeta, policyTools,
+//      policyGuarded, runBlock; api.ts); attach() stores them and emits an `attach` event,
+//      addAgent's spawn event carries the record's sessionId, and resume refuses a blocked
+//      (runBlock) agent. A v28 instance would lack all of it, so api.ts would never report a
+//      child's session id and a blocked restored agent could be resumed.
+const ENGINE_KEY = "__subagentsEngine_v29";
 
 function getEngine(): Engine {
   const g = globalThis as Record<string, unknown>;
@@ -296,6 +303,7 @@ export default function subagents(pi: ExtensionAPI) {
       resumeAgents,
       persistRoster,
       updateStatus,
+      spawnPolicyActive: () => api.spawnPolicy() !== undefined,
     });
 
   // One fixed custom type gives every peer message a distinct, stable visual identity. The
@@ -486,9 +494,11 @@ export default function subagents(pi: ExtensionAPI) {
       spawnedBy: string;
       model: unknown;
       thinkingLevel?: ThinkingLevel;
+      tools?: string[];
+      toolGuard?: ToolGuard;
     },
     existingFile?: string,
-  ): Promise<{ session: SessionLike; sessionFile?: string }> => {
+  ): Promise<{ session: SessionLike; sessionFile?: string; sessionId?: string }> => {
     // Children get the human's settings as VALUES, through a manager whose writes go nowhere.
     // pi's session.setModel()/setThinkingLevel() persist the new default into settings.json, so
     // a file-backed child manager would let a retuned subagent silently change what the next
@@ -500,6 +510,12 @@ export default function subagents(pi: ExtensionAPI) {
       realSettings.getGlobalSettings(),
     );
     const settings = readSettings();
+    // The spawn policy's allowlist and guard (tool-guard.ts): without them the agent inherits the
+    // full default foreground toolset, plus the custom agent tools via customTools; with an
+    // allowlist the orchestration tools always stay (childToolAllowlist).
+    const toolOptions = childToolOptions(spec, toolsFor(spec.name));
+    // Read once with the tools, so the preamble and spawn_subagent word the spawn hint alike.
+    const spawnPolicyActive = api.spawnPolicy() !== undefined;
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: realAgentDir,
@@ -516,9 +532,10 @@ export default function subagents(pi: ExtensionAPI) {
       additionalExtensionPaths: settings.childExtensions,
       extensionFactories: [
         { name: "subagent-timestamps", factory: registerToolTimestamps },
+        ...toolOptions.extensionFactories,
       ],
       systemPromptOverride: () =>
-        agentSystemPrompt(spec.name, spec.systemPrompt, spec.spawnedBy),
+        agentSystemPrompt(spec.name, spec.systemPrompt, spec.spawnedBy, spawnPolicyActive),
     });
     await loader.reload();
     // Project settings ride along as overrides (the in-memory manager only seeds the global
@@ -547,17 +564,15 @@ export default function subagents(pi: ExtensionAPI) {
       sm = SessionManager.inMemory(cwd);
     }
 
-    // Leave the built-in tool allowlist unset so the agent inherits the full default
-    // foreground toolset, plus the custom agent tools via customTools.
     const modelRuntime = await modelRuntimeReady;
     const { session } = await createAgentSession({
+      ...toolOptions.session,
       cwd,
       model: spec.model as NonNullable<
         Parameters<typeof createAgentSession>[0]
       >["model"],
       thinkingLevel: spec.thinkingLevel,
       modelRuntime,
-      customTools: toolsFor(spec.name),
       resourceLoader: loader,
       sessionManager: sm,
       settingsManager: childSettings,
@@ -617,7 +632,11 @@ export default function subagents(pi: ExtensionAPI) {
       getContextUsage: () => session.getContextUsage(),
       getExtensionStatuses: () => extensionStatuses,
     };
-    return { session: managedSession, sessionFile: sm.getSessionFile() };
+    return {
+      session: managedSession,
+      sessionFile: sm.getSessionFile(),
+      sessionId: sm.getSessionId(),
+    };
   };
 
   // Models offered for retuning and named in "unknown model" errors: the session's scoped
@@ -634,6 +653,10 @@ export default function subagents(pi: ExtensionAPI) {
     createSession,
     onActivity: updateStatus,
     listAvailableModels: listModels,
+    spawnPolicy: () => api.spawnPolicy(),
+    cwd: () => cwd,
+    // Re-read per spawn, like childExtensions.
+    spawnPolicyTimeoutMs: () => readSettings().spawnPolicyTimeoutMs,
   });
 
   // Retuning a running agent (the set_subagent_model tool and the panel's model/effort keys).
@@ -652,6 +675,17 @@ export default function subagents(pi: ExtensionAPI) {
     },
     unknownModel: (ref) => unknownModelMessage(ref, listModels()),
     persistRoster: () => persistRoster(),
+  });
+
+  // globalThis.__subagentsApi_v1 for other extensions; a /reload rebinds the same object, unless
+  // the engine version changed (then a fresh object with this load's code replaces it).
+  const api = installApi({
+    engine,
+    engineKey: ENGINE_KEY,
+    retune: async (name, t) => {
+      const result = await setAgentModel("main", { name, ...t });
+      if (!result.ok) throw new Error(result.msg);
+    },
   });
 
   // Overwrite roster.json with current background membership (called after spawn/kill).
@@ -690,15 +724,44 @@ export default function subagents(pi: ExtensionAPI) {
     done.add(subDir);
     const roster = readRoster(subDir);
     if (!roster.length) return;
+    const blocked: string[] = [];
     for (const entry of roster) {
       if (!fs.existsSync(entry.sessionFile)) continue; // file gone -> skip
       const resolved = resolveModel(entry.model);
       if (!resolved) continue; // model no longer available -> skip
       // Placed before the session is built, so its preamble names the adopting parent too.
       const placement = restoredPlacement(entry.spawnedBy, engine.get(entry.spawnedBy)?.depth);
+      // Fail closed: the allowlist comes back from the roster (sessionSpecFromRoster); a guard is
+      // a function, so only the policy's restore hook can give it back. Without it the agent is
+      // restored paused and blocked, with a deny-all guard as a second line.
+      let toolGuard: ToolGuard | undefined;
+      let runBlock: string | undefined;
+      if (entry.guarded) {
+        const restored = await restoreToolGuard(
+          api.spawnPolicyRegistration(),
+          {
+            name: entry.name,
+            parent: placement.spawnedBy,
+            model: `${resolved.provider}/${resolved.id}`,
+            thinkingLevel: entry.thinkingLevel,
+            tools: entry.tools,
+            meta: entry.meta,
+          },
+          readSettings().spawnPolicyTimeoutMs,
+        );
+        if ("guard" in restored) toolGuard = restored.guard;
+        else {
+          const reason = `its spawn-policy tool guard was not restored (${restored.reason}); kill and re-spawn it`;
+          runBlock = reason;
+          toolGuard = () => reason;
+        }
+      }
       try {
-        const { session, sessionFile } = await createSession(
-          sessionSpecFromRoster({ ...entry, ...placement }, resolved.model),
+        const { session, sessionFile, sessionId } = await createSession(
+          {
+            ...sessionSpecFromRoster({ ...entry, ...placement }, resolved.model),
+            ...(toolGuard ? { toolGuard } : {}),
+          },
           entry.sessionFile,
         );
         restoreAgent({
@@ -707,13 +770,26 @@ export default function subagents(pi: ExtensionAPI) {
           model: `${resolved.provider}/${resolved.id}`,
           systemPrompt: entry.systemPrompt,
           sessionFile: sessionFile ?? entry.sessionFile,
+          sessionId,
           session,
           pausedMidTurn:
             deriveStatus(session.messages as RawMessage[]) === "pausedMidTurn",
+          policyTools: entry.tools,
+          policyMeta: entry.meta,
+          policyGuarded: entry.guarded,
+          runBlock,
         });
+        if (runBlock) blocked.push(entry.name);
       } catch {
         /* skip an unrestorable agent */
       }
+    }
+    if (blocked.length > 0) {
+      ui?.notify(
+        `subagents: ${blocked.join(", ")} restored paused and blocked: the spawn policy did not re-attach ` +
+          "their tool guard, so they cannot be resumed (kill and re-spawn them)",
+        "warning",
+      );
     }
     // Present the restored swarm as paused: pausing main's direct children holds every restored
     // agent (main adopted the orphans), and one resume_subagents()/`/subagents-resume` reactivates it.
@@ -809,13 +885,18 @@ export default function subagents(pi: ExtensionAPI) {
       (s) => `${s.model.provider}/${s.model.id}`,
     );
     // Locate this main session's subagents dir (persistence + restore are keyed by it).
+    let sessionId: string | undefined;
     try {
       const id = ctx.sessionManager.getSessionId();
+      sessionId = id;
       const dir = ctx.sessionManager.getSessionDir();
       subDir = id && dir ? subagentsDir(dir, id) : undefined;
     } catch {
       subDir = undefined;
     }
+    // The singleton 'main' record outlives a session switch, so its id is refreshed here.
+    const mainRecord = engine.get("main");
+    if (mainRecord) mainRecord.sessionId = sessionId;
     if (!engine.has("main")) {
       const mainHandle: AgentHandle = {
         // via the globalThis indirection so the singleton handle never uses a stale pi.
@@ -832,6 +913,7 @@ export default function subagents(pi: ExtensionAPI) {
           ? `${foregroundModel.provider}/${foregroundModel.id}`
           : "(foreground)",
         thinkingLevel: foregroundThinkingLevel,
+        sessionId,
         handle: mainHandle,
         spawnedBy: "main",
         depth: 0,
@@ -845,6 +927,7 @@ export default function subagents(pi: ExtensionAPI) {
         },
       });
     }
+    registerMainTools();
     await restoreSwarm();
     // A live ctx is captured again only now: notices queued while it was stale (after a reload)
     // would otherwise wait for main's next run to settle.
@@ -867,10 +950,20 @@ export default function subagents(pi: ExtensionAPI) {
   // Register the foreground tools for 'main'. set_status is background-only: main has
   // ctx.ui.setStatus() + the human watches the chat directly, so a second status channel
   // would only confuse.
-  for (const tool of toolsFor("main")) {
-    if (tool.name === "set_status") continue;
-    pi.registerTool(tool);
-  }
+  // The spawn hint depends on whether a spawn policy is registered, which a policy extension
+  // loaded after this one only does later (at its load or session_start): session_start
+  // registers them again when that changed.
+  let mainToolsPolicy: boolean | undefined;
+  const registerMainTools = (): void => {
+    const active = api.spawnPolicy() !== undefined;
+    if (active === mainToolsPolicy) return;
+    mainToolsPolicy = active;
+    for (const tool of toolsFor("main")) {
+      if (tool.name === "set_status") continue;
+      pi.registerTool(tool);
+    }
+  };
+  registerMainTools();
 
   // KISS: the command and roster clicks share one panel lifecycle; the guard also covers loading.
   const openPanel = async (panelUi: ExtensionUIContext, initialAgent?: string) => {

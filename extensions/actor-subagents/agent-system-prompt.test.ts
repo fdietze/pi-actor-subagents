@@ -30,3 +30,13 @@ test("preamble distinguishes readable prose, human turns and batched replies fro
 	assert.match(out, /END YOUR TURN/);
 	assert.doesNotMatch(out, /once per reply|ONLY channel|never receive your|answers anyway|nearly free|probably have not looked hard enough/);
 });
+
+test("without a spawn policy the spawn hint is unchanged; with one, model and effort are left to it", () => {
+	const plain = agentSystemPrompt("worker", "Be brief.", "main");
+	assert.match(plain, /omit model\/thinkingLevel to inherit yours\./);
+	assert.doesNotMatch(plain, /spawn policy/);
+	const routed = agentSystemPrompt("worker", "Be brief.", "main", true);
+	assert.match(routed, /omit model\/thinkingLevel to let the spawn policy decide \(inherit if none\)/);
+	assert.doesNotMatch(routed, /inherit yours/);
+	assert.equal(routed.replace("let the spawn policy decide (inherit if none)", "inherit yours"), plain);
+});

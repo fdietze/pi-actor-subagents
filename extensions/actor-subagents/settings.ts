@@ -9,6 +9,8 @@
  *   (Inversion — the failure to design out is "unreadable file silently loads something").
  * - `childExtensionStatusKeys` is display-only, so it fails open: anything that is not exactly a
  *   list of non-empty strings shows every key, as if unset.
+ * - `spawnPolicyTimeoutMs` bounds a registered spawn policy's answer (api.ts); anything that is
+ *   not a non-negative integer keeps the default bound, `0` waits without one.
  */
 
 /** Numeric limits of one swarm. */
@@ -23,6 +25,14 @@ export interface Settings {
 	childExtensions: string[];
 	/** Child extension status keys kept for display; undefined keeps every key. */
 	childExtensionStatusKeys: string[] | undefined;
+	/** How long a spawn policy may take to answer one spawn (ms); 0 = no bound. */
+	spawnPolicyTimeoutMs: number;
+}
+
+export const DEFAULT_SPAWN_POLICY_TIMEOUT_MS = 30_000;
+
+function nonNegativeInt(value: unknown, fallback: number): number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
 /** Applied per field, so an unset or invalid single cap does not disturb the others. */
@@ -67,5 +77,6 @@ export function parseSettings(json: string): Settings {
 		},
 		childExtensions: childExtensions(value?.childExtensions),
 		childExtensionStatusKeys: childExtensionStatusKeys(value?.childExtensionStatusKeys),
+		spawnPolicyTimeoutMs: nonNegativeInt(value?.spawnPolicyTimeoutMs, DEFAULT_SPAWN_POLICY_TIMEOUT_MS),
 	};
 }

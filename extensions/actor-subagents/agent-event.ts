@@ -1,6 +1,9 @@
 /** The engine's event log entries, which the feed, panel and reaction waits observe. */
 export type AgentEvent =
-	| { type: "spawn"; name: string; by: string; ts: number }
+	// `childSessionId` is known for a registered (restored) agent; a reservation learns it at
+	// `attach`, once its session exists.
+	| { type: "spawn"; name: string; by: string; childSessionId?: string; ts: number }
+	| { type: "attach"; name: string; by: string; childSessionId?: string; ts: number }
 	// `buffered` distinguishes a message parked in a paused inbox from one handed to the
 	// target session: the feed must not claim delivery for something that has not moved yet.
 	| { type: "route"; from: string; to: string; preview: string; buffered: boolean; ts: number }

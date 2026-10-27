@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_CAPS, parseSettings } from "./settings.ts";
+import { DEFAULT_CAPS, DEFAULT_SPAWN_POLICY_TIMEOUT_MS, parseSettings } from "./settings.ts";
 
 test("an empty or unreadable settings file yields the defaults and no child extensions", () => {
 	for (const input of ["", "not json", "{}", "null", "[]"]) {
 		assert.deepEqual(
 			parseSettings(input),
-			{ caps: DEFAULT_CAPS, childExtensions: [], childExtensionStatusKeys: undefined },
+			{
+				caps: DEFAULT_CAPS,
+				childExtensions: [],
+				childExtensionStatusKeys: undefined,
+				spawnPolicyTimeoutMs: DEFAULT_SPAWN_POLICY_TIMEOUT_MS,
+			},
 			input,
 		);
 	}
@@ -52,7 +57,12 @@ test("child extensions fail closed for missing, malformed, or mixed entries", ()
 test("valid caps and child extensions are read from the same file", () => {
 	assert.deepEqual(
 		parseSettings(JSON.stringify({ maxAgents: 3, childExtensions: ["/one.ts"] })),
-		{ caps: { ...DEFAULT_CAPS, maxAgents: 3 }, childExtensions: ["/one.ts"], childExtensionStatusKeys: undefined },
+		{
+			caps: { ...DEFAULT_CAPS, maxAgents: 3 },
+			childExtensions: ["/one.ts"],
+			childExtensionStatusKeys: undefined,
+			spawnPolicyTimeoutMs: DEFAULT_SPAWN_POLICY_TIMEOUT_MS,
+		},
 	);
 });
 
@@ -63,5 +73,18 @@ test("extension status keys are a list of non-empty strings, otherwise every key
 	assert.deepEqual(parseSettings(JSON.stringify({ childExtensionStatusKeys: [] })).childExtensionStatusKeys, []);
 	for (const childExtensionStatusKeys of ["bash-async", [""], [1], null]) {
 		assert.equal(parseSettings(JSON.stringify({ childExtensionStatusKeys })).childExtensionStatusKeys, undefined);
+	}
+});
+
+test("the spawn policy timeout defaults to 30 s, takes a non-negative integer, and 0 means no bound", () => {
+	assert.equal(DEFAULT_SPAWN_POLICY_TIMEOUT_MS, 30_000);
+	assert.equal(parseSettings(JSON.stringify({ spawnPolicyTimeoutMs: 5000 })).spawnPolicyTimeoutMs, 5000);
+	assert.equal(parseSettings(JSON.stringify({ spawnPolicyTimeoutMs: 0 })).spawnPolicyTimeoutMs, 0);
+	for (const spawnPolicyTimeoutMs of [-1, 2.5, "100", null, Number.POSITIVE_INFINITY]) {
+		assert.equal(
+			parseSettings(JSON.stringify({ spawnPolicyTimeoutMs })).spawnPolicyTimeoutMs,
+			DEFAULT_SPAWN_POLICY_TIMEOUT_MS,
+			String(spawnPolicyTimeoutMs),
+		);
 	}
 });

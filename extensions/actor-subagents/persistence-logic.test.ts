@@ -136,3 +136,29 @@ test("restore treats unanswered actionable scheduler input as interrupted withou
 	assert.equal(deriveStatus([assistant([]), custom(mergeRoutedAgentMessages([notice, error]))]), "pausedMidTurn");
 	assert.equal(deriveStatus([custom(error), assistant([]), custom(notice)]), "idle");
 });
+
+test("a spawn policy's allowlist, meta and guard flag persist with the agent", () => {
+	const base = { name: "w", spawnedBy: "main", depth: 1, model: "a/b", systemPrompt: "p", sessionFile: "/s/w.jsonl" };
+	const cyclic: Record<string, unknown> = {};
+	cyclic.self = cyclic;
+	const roster = serializeRoster([
+		{ ...base, policyTools: ["read", "grep"], policyMeta: { tier: "T1", at: [1, 2] }, policyGuarded: true },
+		{ ...base, name: "plain" },
+		// Not JSON: dropped, so one odd value cannot keep the whole roster from being written.
+		{ ...base, name: "odd", policyMeta: cyclic },
+	]);
+	assert.deepEqual(roster[0], { ...base, tools: ["read", "grep"], meta: { tier: "T1", at: [1, 2] }, guarded: true });
+	assert.deepEqual(roster[1], { ...base, name: "plain" });
+	assert.deepEqual(roster[2], { ...base, name: "odd" });
+	assert.deepEqual(parseRoster(JSON.stringify(roster)), roster);
+	const [entry] = parseRoster(JSON.stringify(roster));
+	assert.deepEqual(sessionSpecFromRoster(entry!, "m").tools, ["read", "grep"]);
+	assert.equal("tools" in sessionSpecFromRoster(roster[1]!, "m"), false);
+});
+
+test("parseRoster drops an entry whose restriction it cannot read, so it never comes back unrestricted", () => {
+	const base = { name: "w", spawnedBy: "main", depth: 1, model: "a/b", systemPrompt: "p", sessionFile: "/s/w.jsonl" };
+	for (const bad of [{ tools: "read" }, { tools: ["read", 3] }, { tools: [""] }, { guarded: "yes" }, { guarded: 1 }]) {
+		assert.deepEqual(parseRoster(JSON.stringify([{ ...base, ...bad }])), [], JSON.stringify(bad));
+	}
+});

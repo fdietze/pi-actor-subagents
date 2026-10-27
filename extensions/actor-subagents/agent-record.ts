@@ -96,6 +96,19 @@ export interface AgentRecord {
 	systemPrompt?: string;
 	/** Absolute path of this agent's session JSONL on disk (undefined for 'main' + in-memory). */
 	sessionFile?: string;
+	/** pi's id of the agent's session (spawn-policy caller, api.list, spawn events). */
+	sessionId?: string;
+	/** Opaque data the spawn policy attached to this agent (api.ts). */
+	policyMeta?: unknown;
+	/** The spawn policy's tool allowlist for this agent; persisted, so a restore keeps it. */
+	policyTools?: string[];
+	/** The agent runs with a spawn-policy tool guard (a function, so only this fact persists). */
+	policyGuarded?: true;
+	/**
+	 * Why this agent must not run: a restored guarded agent whose guard the policy did not
+	 * re-attach. It is restored with its own pause, and resume refuses to clear it.
+	 */
+	runBlock?: string;
 	/**
 	 * Phase of the running turn (reasoning vs answer text vs tool run); undefined means no
 	 * turn is running. Single field for "is it working" AND "at what": a separate streaming
