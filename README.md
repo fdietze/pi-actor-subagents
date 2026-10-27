@@ -45,14 +45,16 @@ Optional file: `~/.pi/agent/actor-subagents/settings.json` (inside Pi's configur
   "childExtensions": [
     "~/.pi/agent/npm/node_modules/pi-infinite-context/extensions/infinite-context/index.ts"
   ],
-  "childExtensionStatusKeys": ["bash-async"]
+  "childExtensionStatusKeys": ["bash-async"],
+  "childSystemPrompt": "replace"
 }
 ```
 
 - `maxAgents`: maximum live background agents (default: `8`).
 - `maxSpawnDepth`: maximum hierarchy depth (default: `3`). Both limits must be positive integers; missing or invalid values use their defaults. Changes apply after restarting Pi.
-- `childExtensions`: extension whitelist for subagents (default: `[]`). List extension files or directories; children do not inherit Pi's discovered extensions. Actor-subagents' orchestration tools are always available and need no whitelist entry. Changes apply to newly spawned agents. The example path assumes `pi install npm:pi-infinite-context` in the default Pi setup. Child extensions run unattended, with `ctx.mode === "print"` and `ctx.hasUI === false`, so they take their headless paths instead of asking. Their `ctx.ui.setStatus` texts still appear in the roster and in `list_subagents` when they set them unconditionally, not only when `ctx.hasUI` is true.
+- `childExtensions`: extension whitelist for subagents (default: `[]`). List extension files or directories; children do not inherit Pi's discovered extensions. Actor-subagents' orchestration tools are always available and need no whitelist entry. With `childSystemPrompt` set to `"append"` (see below), a listed extension's prompt guidelines reach subagents too; by default they do not. Changes apply to newly spawned agents. The example path assumes `pi install npm:pi-infinite-context` in the default Pi setup. Child extensions run unattended, with `ctx.mode === "print"` and `ctx.hasUI === false`, so they take their headless paths instead of asking. Their `ctx.ui.setStatus` texts still appear in the roster and in `list_subagents` when they set them unconditionally, not only when `ctx.hasUI` is true.
 - `childExtensionStatusKeys`: status keys shown in the roster and in `list_subagents` of subagents (default: unset, which shows every key). Statuses with other keys are ignored. An invalid value shows every key. Changes apply to newly spawned agents.
+- `childSystemPrompt`: shape of a subagent's system prompt (default: `"replace"`). `"replace"`: the agent instructions are the whole system prompt, as before this setting existed. `"append"`: the agent instructions are appended to Pi's own system prompt, so Pi's tools and guidelines sections stay, including the prompt guidelines of a listed `childExtensions` extension. Any other value uses the default. Changes apply to newly spawned agents.
 
 ## Coordination
 

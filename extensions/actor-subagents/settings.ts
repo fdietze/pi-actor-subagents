@@ -9,6 +9,8 @@
  *   (Inversion — the failure to design out is "unreadable file silently loads something").
  * - `childExtensionStatusKeys` is display-only, so it fails open: anything that is not exactly a
  *   list of non-empty strings shows every key, as if unset.
+ * - `childSystemPrompt` picks the prompt shape; anything but "append" keeps the default, "replace"
+ *   (the agent preamble alone, as before the setting existed).
  */
 
 /** Numeric limits of one swarm. */
@@ -17,12 +19,19 @@ export interface Caps {
 	maxSpawnDepth: number;
 }
 
+/** How a child's system prompt is built; see child-prompt.ts. */
+export type ChildSystemPrompt = "replace" | "append";
+
+export const DEFAULT_CHILD_SYSTEM_PROMPT: ChildSystemPrompt = "replace";
+
 export interface Settings {
 	caps: Caps;
 	/** Extension paths loaded into every child session, on top of its always-on tools. */
 	childExtensions: string[];
 	/** Child extension status keys kept for display; undefined keeps every key. */
 	childExtensionStatusKeys: string[] | undefined;
+	/** Child prompt shape: the preamble replaces pi's prompt, or is appended to it. */
+	childSystemPrompt: ChildSystemPrompt;
 }
 
 /** Applied per field, so an unset or invalid single cap does not disturb the others. */
@@ -40,6 +49,10 @@ function childExtensions(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	if (!value.every((entry) => typeof entry === "string" && entry.length > 0)) return [];
 	return value;
+}
+
+function childSystemPrompt(value: unknown): ChildSystemPrompt {
+	return value === "append" ? "append" : DEFAULT_CHILD_SYSTEM_PROMPT;
 }
 
 function childExtensionStatusKeys(value: unknown): string[] | undefined {
@@ -67,5 +80,6 @@ export function parseSettings(json: string): Settings {
 		},
 		childExtensions: childExtensions(value?.childExtensions),
 		childExtensionStatusKeys: childExtensionStatusKeys(value?.childExtensionStatusKeys),
+		childSystemPrompt: childSystemPrompt(value?.childSystemPrompt),
 	};
 }

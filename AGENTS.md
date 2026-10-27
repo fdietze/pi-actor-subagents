@@ -21,9 +21,9 @@ npm pack --dry-run
 
 `extensions/actor-subagents/index.ts` is the pi entry point and imperative shell. It registers the foreground tools, commands, renderer, and lifecycle handlers; creates headless child sessions through the pi SDK; and connects them to the pure orchestration core.
 
-A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Child extension discovery is disabled. The entry point reads `settings.json` on every spawn and supplies the `childExtensions` paths and the `childExtensionStatusKeys` filter. Missing or invalid settings are an empty capability set.
+A spawn request is checked by `engine.ts`, resolved by `resolve-model.ts`, constructed by `spawner.ts`, and given the tools from `agent-tools.ts` as pi `customTools`. Its agent preamble (`agent-system-prompt.ts`) becomes the child's system prompt through the loader's `systemPromptOverride` by default, or is appended to Pi's own prompt through `appendSystemPromptOverride` when `childSystemPrompt` is `"append"` (`child-prompt.ts`); append keeps Pi's tools and guidelines sections, including extensions' `promptGuidelines`. Child extension discovery is disabled. The entry point reads `settings.json` on every spawn and supplies the `childExtensions` paths, the `childExtensionStatusKeys` filter and the `childSystemPrompt` mode. Missing or invalid settings are an empty capability set.
 
-`settings.ts` parses that one file (`parseSettings`, pure). The file is flat — `maxAgents`, `maxSpawnDepth`, `childExtensions`, `childExtensionStatusKeys` at the top level — while the parsed `Settings` groups the two limits as `caps`, which is what the engine is constructed from. The limits fall back per field to `DEFAULT_CAPS` and are read once, when `getEngine()` builds the reload-surviving singleton — changed limits therefore apply at the next pi start. `childExtensions` is fail-closed and re-read per spawn. `childExtensionStatusKeys` is display-only, fail-open (missing or invalid shows every key) and re-read per spawn.
+`settings.ts` parses that one file (`parseSettings`, pure). The file is flat — `maxAgents`, `maxSpawnDepth`, `childExtensions`, `childExtensionStatusKeys`, `childSystemPrompt` at the top level — while the parsed `Settings` groups the two limits as `caps`, which is what the engine is constructed from. The limits fall back per field to `DEFAULT_CAPS` and are read once, when `getEngine()` builds the reload-surviving singleton — changed limits therefore apply at the next pi start. `childExtensions` is fail-closed and re-read per spawn. `childExtensionStatusKeys` is display-only, fail-open (missing or invalid shows every key) and re-read per spawn. `childSystemPrompt` is `"replace"` unless exactly `"append"`, and re-read per spawn.
 
 Tool results are stamped with their wall-clock finish time and, when a matching `tool_call` start was captured by call id, their start time. A finish-only result does not establish tool duration (`tool-timestamp.ts`). A pi hook only fires in the session that registered it, so `index.ts` registers it twice: directly for the foreground, and as an inline `extensionFactories` entry in every child session. That in-process channel is separate from `additionalExtensionPaths`, which stays exactly the configured `childExtensions` policy. Both registrations apply the pure `tool-timestamp.ts`.
 
@@ -42,7 +42,7 @@ When the main session is file-backed, `persistence.ts` stores `roster.json` and 
 - Commands: `/subagents`, `/subagents-pause`, `/subagents-resume`, `/subagents-kill`
 - Custom message type and details shape: `agent-message.ts` (scheduler control notices and routed errors; error parts carry optional `actionable: true`, preserved through parsing and batching for restore)
 - Reserved agent names: `main`, `scheduler`, `user`, `restore` (`engine.ts`)
-- Settings (caps, child capability policy and child status filter): `<pi agent dir>/actor-subagents/settings.json`, the agent dir being the SDK's `getAgentDir()` (normally `~/.pi/agent`)
+- Settings (caps, child capability policy, child status filter and child prompt mode): `<pi agent dir>/actor-subagents/settings.json`, the agent dir being the SDK's `getAgentDir()` (normally `~/.pi/agent`)
 - Persistence: `<main-session-dir>/subagents/<main-session-id>/`
 - Process reload compatibility: every `__subagents*` `globalThis` key in `index.ts`
 
@@ -58,7 +58,7 @@ Extension paths below are relative to `extensions/actor-subagents/`.
 - `authorize.ts`: the subtree authority rule, "who spawns, owns", and the non-agent actors `user`/`restore`
 - `abort-tracker.ts`: per-agent aborts in flight, which resume waits for
 - `agent-record.ts`, `agent-event.ts`, `control-result.ts`: the engine's record, event and control-result types
-- `settings.ts`: pure parser for `settings.json` (caps + child extension policy + child status filter) and the default caps
+- `settings.ts`: pure parser for `settings.json` (caps + child extension policy + child status filter + child prompt mode) and the defaults
 - `agent-tools.ts`: orchestration tool definitions shared by foreground and children
 - `spawner.ts`: child session lifecycle and event bridge
 - `persistence.ts`, `persistence-logic.ts`: durable files and validated restoration
@@ -67,6 +67,8 @@ Extension paths below are relative to `extensions/actor-subagents/`.
 - `lifecycle-notice.ts`: pure rule for who is told about a pause, resume, kill or error, and what
 - `pi-silent-append.test.ts`: installed Pi contract that a `triggerTurn: false` custom message on an idle session appends without a turn
 - `tool-timestamp.ts`: pure tool-result stamper (wall-clock start + finish times)
+- `child-prompt.ts`: the child's prompt options for Pi's resource loader, by `childSystemPrompt` mode (`replace`: preamble as the whole prompt; `append`: preamble after Pi's prompt)
+- `pi-child-prompt.test.ts`: installed Pi contracts: in `append` a child keeps Pi's prompt sections, extension `promptGuidelines` and `APPEND_SYSTEM.md`, with the preamble after them; in `replace` the preamble is the prompt and Pi's tools/rules sections are dropped
 - `roster-widget.ts`: native mouse routing from persistent roster rows to the shared panel lifecycle in `index.ts`
 - `roster-entries.ts`: one roster row per agent, shared by the persistent roster and the panel
 - `bind-headless-extensions.ts`, `extension-status.ts`: unattended child extension binding with status capture, and the pure status sanitizer/formatters

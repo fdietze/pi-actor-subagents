@@ -6,7 +6,7 @@ test("an empty or unreadable settings file yields the defaults and no child exte
 	for (const input of ["", "not json", "{}", "null", "[]"]) {
 		assert.deepEqual(
 			parseSettings(input),
-			{ caps: DEFAULT_CAPS, childExtensions: [], childExtensionStatusKeys: undefined },
+			{ caps: DEFAULT_CAPS, childExtensions: [], childExtensionStatusKeys: undefined, childSystemPrompt: "replace" },
 			input,
 		);
 	}
@@ -52,7 +52,7 @@ test("child extensions fail closed for missing, malformed, or mixed entries", ()
 test("valid caps and child extensions are read from the same file", () => {
 	assert.deepEqual(
 		parseSettings(JSON.stringify({ maxAgents: 3, childExtensions: ["/one.ts"] })),
-		{ caps: { ...DEFAULT_CAPS, maxAgents: 3 }, childExtensions: ["/one.ts"], childExtensionStatusKeys: undefined },
+		{ caps: { ...DEFAULT_CAPS, maxAgents: 3 }, childExtensions: ["/one.ts"], childExtensionStatusKeys: undefined, childSystemPrompt: "replace" },
 	);
 });
 
@@ -63,5 +63,21 @@ test("extension status keys are a list of non-empty strings, otherwise every key
 	assert.deepEqual(parseSettings(JSON.stringify({ childExtensionStatusKeys: [] })).childExtensionStatusKeys, []);
 	for (const childExtensionStatusKeys of ["bash-async", [""], [1], null]) {
 		assert.equal(parseSettings(JSON.stringify({ childExtensionStatusKeys })).childExtensionStatusKeys, undefined);
+	}
+});
+
+test("childSystemPrompt defaults to replace, the child's prompt being only its agent preamble", () => {
+	assert.equal(parseSettings("{}").childSystemPrompt, "replace");
+	assert.equal(parseSettings(JSON.stringify({ maxAgents: 3 })).childSystemPrompt, "replace");
+});
+
+test("childSystemPrompt accepts replace and append", () => {
+	assert.equal(parseSettings(JSON.stringify({ childSystemPrompt: "replace" })).childSystemPrompt, "replace");
+	assert.equal(parseSettings(JSON.stringify({ childSystemPrompt: "append" })).childSystemPrompt, "append");
+});
+
+test("an invalid childSystemPrompt falls back to replace", () => {
+	for (const childSystemPrompt of ["Append", "prepend", "", 1, true, null, ["append"], { mode: "append" }]) {
+		assert.equal(parseSettings(JSON.stringify({ childSystemPrompt })).childSystemPrompt, "replace", String(childSystemPrompt));
 	}
 });

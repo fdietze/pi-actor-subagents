@@ -25,7 +25,7 @@ import {
 } from "./agent-message.ts";
 import { renderAgentMessage } from "./agent-message-renderer.ts";
 import { orderAgents } from "./agent-order.ts";
-import { agentSystemPrompt } from "./agent-system-prompt.ts";
+import { childPromptOptions } from "./child-prompt.ts";
 import { makeAgentTools } from "./agent-tools.ts";
 import type { AgentHandle } from "./agent-record.ts";
 import type { EngineResumeResult } from "./control-result.ts";
@@ -517,8 +517,7 @@ export default function subagents(pi: ExtensionAPI) {
       extensionFactories: [
         { name: "subagent-timestamps", factory: registerToolTimestamps },
       ],
-      systemPromptOverride: () =>
-        agentSystemPrompt(spec.name, spec.systemPrompt, spec.spawnedBy),
+      ...childPromptOptions(spec.name, spec.systemPrompt, spec.spawnedBy, settings.childSystemPrompt),
     });
     await loader.reload();
     // Project settings ride along as overrides (the in-memory manager only seeds the global
