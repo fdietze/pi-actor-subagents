@@ -18,8 +18,9 @@ const record = (name: string) => ({
 });
 
 /** The tool `name` acting as `self`, with the surrounding shell stubbed out. */
-function toolOf(engine: Engine, self: string, name: string) {
+function toolOf(engine: Engine, self: string, name: string, extra: { promptCacheTtlMs?: () => number } = {}) {
 	const tools = makeAgentTools(self, {
+		...extra,
 		engine,
 		spawnAgent: async () => ({ ok: true, msg: "" }),
 		setAgentModel: async () => ({ ok: true, msg: "" }),
@@ -118,4 +119,85 @@ test("descriptions distinguish handoff, observation, persistence attempts and si
 	assert.match(description("set_subagent_model"), /next model request, including later requests in the same run/);
 	assert.match(description("pause_subagents"), /Effects already in flight may still settle/);
 	assert.match(description("subagent_history"), /Paging cannot retrieve clipped remainders/);
+});
+
+type Props = Record<string, { description?: string; type?: string }>;
+const spawnToolWith = (
+	e: Engine,
+	spawnPolicyActive: (() => boolean) | undefined,
+	spawnAgent: Parameters<typeof makeAgentTools>[1]["spawnAgent"] = async () => ({ ok: true, msg: "" }),
+) =>
+	makeAgentTools("main", {
+		engine: e,
+		spawnAgent,
+		setAgentModel: async () => ({ ok: true, msg: "" }),
+		resumeAgents: (by, names) => e.resume(by, names),
+		persistRoster: () => {},
+		updateStatus: () => {},
+		...(spawnPolicyActive ? { spawnPolicyActive } : {}),
+	}).find((t) => t.name === "spawn_subagent")!;
+
+test("without a spawn policy spawn_subagent keeps its model/effort hints and has no task parameter", () => {
+	const e = new Engine({ maxAgents: 4, maxSpawnDepth: 3 });
+	for (const active of [undefined, () => false]) {
+		const props = (spawnToolWith(e, active).parameters as { properties: Props }).properties;
+		assert.equal(
+			props.model?.description,
+			"Omit to inherit your current model (the default — almost always correct). Set 'provider/id' " +
+				"ONLY when the user explicitly named a specific model; an unknown value reports available models when any are listed.",
+		);
+		assert.equal(
+			props.thinkingLevel?.description,
+			"often described as <model>@<thinking level>. Omit to inherit your current effective thinking level / effort.",
+		);
+		assert.equal(props.task, undefined);
+	}
+});
+
+test("with a spawn policy spawn_subagent leaves model and effort to it and passes its task card through", async () => {
+	const e = new Engine({ maxAgents: 4, maxSpawnDepth: 3 });
+	const tool = spawnToolWith(e, () => true);
+	const props = (tool.parameters as { properties: Props }).properties;
+	for (const key of ["model", "thinkingLevel"]) {
+		assert.match(props[key]?.description ?? "", /spawn policy decide \(inherit if none\)/);
+		assert.doesNotMatch(props[key]?.description ?? "", /almost always correct/);
+	}
+	assert.equal(props.task?.type, "object");
+	assert.match(props.task?.description ?? "", /spawn policy/);
+	assert.ok(!(tool.parameters as { required?: string[] }).required?.includes("task"));
+
+	const specs: unknown[] = [];
+	const spawnTool = (result: { ok: boolean; msg: string; rejected?: true }) =>
+		spawnToolWith(e, () => true, async (spec) => {
+			specs.push(spec);
+			return result;
+		});
+	const args = { name: "w", systemPrompt: "p", message: "go", task: { kind: "scout" } };
+	const ok = await spawnTool({ ok: true, msg: "spawned" }).execute("c1", args, undefined, undefined, undefined as never);
+	assert.equal((specs[0] as { task?: unknown }).task, args.task);
+	assert.equal((ok as { isError?: boolean }).isError, undefined);
+	// Only a refusal by the spawn policy is a tool error; other failures stay plain results.
+	const refused = await spawnTool({ ok: false, msg: "error: no card", rejected: true }).execute("c2", args, undefined, undefined, undefined as never);
+	assert.equal((refused as { isError?: boolean }).isError, true);
+	assert.equal(textOf(refused), "error: no card");
+	const failed = await spawnTool({ ok: false, msg: "error: cap" }).execute("c3", args, undefined, undefined, undefined as never);
+	assert.equal((failed as { isError?: boolean }).isError, undefined);
+});
+
+test("list_subagents shows cache warmth only with the configured prompt cache lifetime", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	engine.addAgent(record("main"));
+	const now = Date.now();
+	engine.addAgent({
+		...record("worker"),
+		view: {
+			getMessages: () => [{ role: "assistant", timestamp: now - 60_000, usage: { cost: { total: 0.25 } } }],
+			getContextUsage: () => undefined,
+			subscribe: () => () => {},
+		} as never,
+	});
+	const list = (extra: { promptCacheTtlMs?: () => number }) =>
+		toolOf(engine, "main", "list_subagents", extra).execute("id", {}, undefined, undefined, undefined as never);
+	assert.match(textOf(await list({ promptCacheTtlMs: () => 10 * 60_000 })) ?? "", /cache=warm\(\d+m left\) \$0\.25/);
+	assert.doesNotMatch(textOf(await list({})) ?? "", /cache=/);
 });

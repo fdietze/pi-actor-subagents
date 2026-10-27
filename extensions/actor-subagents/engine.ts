@@ -137,7 +137,7 @@ export class Engine {
 
 	addAgent(rec: AgentRecord): void {
 		this.agents.set(rec.name, rec);
-		this.emit({ type: "spawn", name: rec.name, by: rec.spawnedBy, ts: Date.now() });
+		this.emit({ type: "spawn", name: rec.name, by: rec.spawnedBy, childSessionId: rec.sessionId, ts: Date.now() });
 	}
 
 	// --- Atomic reservation (prevents spawn/send, duplicate and cap races) ---
@@ -188,6 +188,10 @@ export class Engine {
 			reconfigure?: AgentRecord["reconfigure"];
 			systemPrompt?: string;
 			sessionFile?: string;
+			sessionId?: string;
+			policyMeta?: unknown;
+			policyTools?: string[];
+			policyGuarded?: true;
 		},
 	): void {
 		const rec = this.agents.get(name);
@@ -200,7 +204,12 @@ export class Engine {
 		rec.reconfigure = opts.reconfigure;
 		rec.systemPrompt = opts.systemPrompt;
 		rec.sessionFile = opts.sessionFile;
+		rec.sessionId = opts.sessionId;
+		rec.policyMeta = opts.policyMeta;
+		rec.policyTools = opts.policyTools;
+		rec.policyGuarded = opts.policyGuarded;
 		rec.pending = false;
+		this.emit({ type: "attach", name, by: rec.spawnedBy, childSessionId: rec.sessionId, ts: Date.now() });
 		const buffered = rec.buffer ?? [];
 		rec.buffer = undefined;
 		// A pause can land while the session is being created. The reservation's messages join the
@@ -525,10 +534,16 @@ export class Engine {
 	async resume(by: string, names?: string[]): Promise<EngineResumeResult> {
 		const { results, recs } = this.controlTargets(by, names);
 		const before = this.pausedSet();
-		const cleared = [...new Set(recs)].filter((rec) => rec.paused !== undefined); // a name given twice clears once
+		// A name given twice clears once; a blocked agent (runBlock) keeps its pause.
+		const cleared = [...new Set(recs)].filter((rec) => rec.paused !== undefined && rec.runBlock === undefined);
 		for (const rec of cleared) rec.paused = undefined;
 		for (const result of results) {
 			const rec = this.agents.get(result.target);
+			if (result.ok && rec?.runBlock !== undefined) {
+				result.ok = false;
+				result.reason = rec.runBlock;
+				continue;
+			}
 			const holder = result.ok && rec ? pauseHolder(this.agents, rec) : undefined;
 			if (holder) result.reason = `still held by '${holder}'`;
 		}

@@ -45,7 +45,8 @@ Optional file: `~/.pi/agent/actor-subagents/settings.json` (inside Pi's configur
   "childExtensions": [
     "~/.pi/agent/npm/node_modules/pi-infinite-context/extensions/infinite-context/index.ts"
   ],
-  "childExtensionStatusKeys": ["bash-async"]
+  "childExtensionStatusKeys": ["bash-async"],
+  "promptCacheTtlMs": 300000
 }
 ```
 
@@ -53,6 +54,32 @@ Optional file: `~/.pi/agent/actor-subagents/settings.json` (inside Pi's configur
 - `maxSpawnDepth`: maximum hierarchy depth (default: `3`). Both limits must be positive integers; missing or invalid values use their defaults. Changes apply after restarting Pi.
 - `childExtensions`: extension whitelist for subagents (default: `[]`). List extension files or directories; children do not inherit Pi's discovered extensions. Actor-subagents' orchestration tools are always available and need no whitelist entry. Changes apply to newly spawned agents. The example path assumes `pi install npm:pi-infinite-context` in the default Pi setup. Child extensions run unattended, with `ctx.mode === "print"` and `ctx.hasUI === false`, so they take their headless paths instead of asking. Their `ctx.ui.setStatus` texts still appear in the roster and in `list_subagents` when they set them unconditionally, not only when `ctx.hasUI` is true.
 - `childExtensionStatusKeys`: status keys shown in the roster and in `list_subagents` of subagents (default: unset, which shows every key). Statuses with other keys are ignored. An invalid value shows every key. Changes apply to newly spawned agents.
+- `spawnPolicyTimeoutMs`: how long a registered spawn policy (see below) may take to answer one spawn, in milliseconds (default: `30000`; `0` waits without a bound). A late answer fails the spawn. Invalid values use the default. Changes apply to the next spawn.
+- `promptCacheTtlMs`: your provider's prompt-cache lifetime in milliseconds (default: `300000`, Anthropic's default 5 minutes). `list_subagents` shows each agent's usage after its origin (extension statuses stay last), `cache=warm(1m left) ctx=143k $2.10`: whether its next request would still read the prompt cache (not shown while the agent is running), context tokens and cost so far. The cost is summed over the assistant messages in the agent's current transcript, so it is understated once an extension has folded or compacted older messages away. `0` leaves out `cache=`; an invalid value means the default. Changes apply at the next `list_subagents` call.
+
+## Spawn policy API for extensions
+
+Another extension can decide how subagents are spawned and observe the swarm through `globalThis.__subagentsApi_v1` (types in `extensions/actor-subagents/api.ts`):
+
+```ts
+const api = (globalThis as any).__subagentsApi_v1; // undefined until actor-subagents has loaded
+const unregister = api.registerSpawnPolicy(
+  async (args, caller) => (args.task ? { model: "anthropic/claude-sonnet-4-5", thinkingLevel: "medium" } : { reject: "add a task card" }),
+  { owner: "my-router" },
+);
+```
+
+- `registerSpawnPolicy(fn, { owner?, restore? })`: one policy per process. Registering again under the current registration's `owner` replaces it (so a policy extension can simply register again after `/reload`); any other registration throws while one is in place. The returned function unregisters, and does nothing once its registration was replaced. The policy runs on every `spawn_subagent` call at every depth, after the name, cap and depth checks, with the spawn arguments (including the optional `task` object, otherwise unused) and the caller (`name`, `sessionId`, `model`, `thinkingLevel`, `policyMeta`, `cwd`). It returns `{ reject }`, which fails the tool call with that reason, or an acceptance whose fields are all optional: `model` and `thinkingLevel` (omitted ones follow the normal route: the spawn's own argument, else the spawner's), `briefAppend` (appended to the first message), `tools` (allowlist of plain names of the child's built-in and extension tools; the orchestration tools always stay), `toolGuard` (called on each of the child's tool calls; a returned string blocks the call with that reason) and `meta` (JSON-serializable; stored on the child, offered back as `caller.policyMeta` when it spawns). A policy that throws, returns anything else, or does not answer within `spawnPolicyTimeoutMs` fails the spawn the same way. Without a policy, children inherit the spawner's model and effort, and the `spawn_subagent` tool and agent preamble read exactly as without this API.
+- `subscribe(listener)`: engine events; exactly one `spawn` event per agent, sent once its session exists and carrying `childSessionId`.
+- `list()`: every agent, `main` (the foreground, its own parent) included, with parent, session id, model, effort, state (`spawning` while a reserved name has no session yet, then `running`, `idle` or `paused`), idle time, last request time, context tokens, cost and `policyMeta`.
+- `retune(name, { model?, thinkingLevel? })`: retune with `main`'s authority.
+- `send(to, text, from)`: deliver like `send_message`; `from` is the sender name the recipient sees and is required.
+
+Trust: the API is an in-process surface for extensions you installed, which already run with Pi's full process authority. It does not authenticate callers: `retune` acts as `main`, and `send` accepts any sender name, including `main` or a real agent's.
+
+Reload: the object survives `/reload` while the engine version (`ENGINE_KEY` in `index.ts`) stays the same. An update that changes the engine version installs a fresh object and carries the registered policy over, so read `globalThis.__subagentsApi_v1` again after a reload (e.g. in `session_start`) rather than keeping a reference.
+
+Restart: an agent's `tools` and `meta` are saved in the roster, so a restored agent keeps its allowlist. A `toolGuard` is a function and cannot be saved: for a guarded agent, restore calls the `restore(info)` hook given at registration (`info`: name, parent, model, effort, tools, meta) and installs the guard it returns. Without a policy, a hook or a guard, the agent is restored paused and blocked (resume refuses it, its tool calls are blocked) and the human is notified; kill and re-spawn it. Restore runs in actor-subagents' own `session_start`, so register the policy as soon as the API exists: at load time, or in `session_start` when your extension loads before actor-subagents.
 
 ## Coordination
 

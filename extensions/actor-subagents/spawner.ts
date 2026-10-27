@@ -5,12 +5,14 @@
  */
 import type { ExtensionStatuses } from "./extension-status.ts";
 import type { RoutedAgentMessage } from "./agent-message.ts";
+import { type Caller, decideSpawn, type SpawnPolicy } from "./api.ts";
 import { formatStatusDetail, type StopReason } from "./agent-status.ts";
 import type { AgentHandle, AgentRecord, AgentView } from "./agent-record.ts";
 import type { Engine } from "./engine.ts";
 import { formatReceiverStatus } from "./feed.ts";
 import { unknownModelMessage } from "./resolve-model.ts";
 import { formatModelThinking, type ThinkingLevel } from "./thinking-level.ts";
+import type { ToolGuard } from "./tool-guard.ts";
 
 export type { ThinkingLevel } from "./thinking-level.ts";
 
@@ -89,6 +91,8 @@ export interface SpawnSpec {
 	thinkingLevel?: ThinkingLevel;
 	/** Optional first message: delivered atomically to the new agent right after spawn. */
 	message?: string;
+	/** Opaque task card, passed through to the spawn policy only. */
+	task?: unknown;
 }
 
 export interface SpawnerDeps {
@@ -109,9 +113,18 @@ export interface SpawnerDeps {
 		spawnedBy: string;
 		model: unknown;
 		thinkingLevel?: ThinkingLevel;
-	}) => Promise<{ session: SessionLike; sessionFile?: string }>;
+		/** Tool allowlist set by the spawn policy; undefined keeps the full default toolset. */
+		tools?: string[];
+		toolGuard?: ToolGuard;
+	}) => Promise<{ session: SessionLike; sessionFile?: string; sessionId?: string }>;
 	/** Called after every relevant activity (e.g. refresh the status footer). */
 	onActivity?: () => void;
+	/** The registered spawn policy (api.ts), read per spawn; none means the child inherits the spawner's model and effort. */
+	spawnPolicy?: () => SpawnPolicy | undefined;
+	/** Working directory reported to the policy as `caller.cwd`. */
+	cwd?: () => string;
+	/** How long one policy call may take (ms); 0 or absent = no bound. Read per spawn. */
+	spawnPolicyTimeoutMs?: () => number;
 }
 
 /** Metadata to re-register an agent from a rehydrated (disk-loaded) session on restart. */
@@ -122,13 +135,21 @@ export interface RestoreSpec {
 	model: string; // "provider/id" display string
 	systemPrompt: string;
 	sessionFile: string;
+	sessionId?: string;
 	session: SessionLike;
 	/** Derived from the transcript tail: true => resume re-triggers it; false => idle. */
 	pausedMidTurn: boolean;
+	/** The spawn policy's persisted state (see AgentRecord). */
+	policyTools?: string[];
+	policyMeta?: unknown;
+	policyGuarded?: true;
+	/** Set when the agent must not run (its guard was not re-attached): restored paused and blocked. */
+	runBlock?: string;
 }
 
 export interface Spawner {
-	spawnAgent: (spec: SpawnSpec, spawnerName: string) => Promise<{ ok: boolean; msg: string }>;
+	/** `rejected` marks a refusal by the spawn policy (the tool reports it as an error). */
+	spawnAgent: (spec: SpawnSpec, spawnerName: string) => Promise<{ ok: boolean; msg: string; rejected?: true }>;
 	/** Re-register an agent from a restored session (used by restart resume). */
 	restoreAgent: (spec: RestoreSpec) => void;
 }
@@ -347,20 +368,26 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			reconfigure,
 			systemPrompt: spec.systemPrompt,
 			sessionFile: spec.sessionFile,
+			sessionId: spec.sessionId,
 			spawnedBy: spec.spawnedBy,
 			depth: spec.depth,
 			createdAt: Date.now(),
 			turns: 0,
 			lastActivity: Date.now(),
 			pausedMidTurn: spec.pausedMidTurn,
+			...(spec.policyTools ? { policyTools: spec.policyTools } : {}),
+			...(spec.policyMeta !== undefined ? { policyMeta: spec.policyMeta } : {}),
+			...(spec.policyGuarded ? { policyGuarded: true as const } : {}),
+			// Its own pause: resuming its parent must not release it either (Engine.resume).
+			...(spec.runBlock !== undefined ? { runBlock: spec.runBlock, paused: "restore" } : {}),
 		});
 	};
 
-	const spawnAgent = async (spec: SpawnSpec, spawnerName: string): Promise<{ ok: boolean; msg: string }> => {
+	const spawnAgent: Spawner["spawnAgent"] = async (spec, spawnerName) => {
 		const spawner = engine.get(spawnerName);
-		const inheritRef = spec.model ?? spawner?.model;
+		let inheritRef = spec.model ?? spawner?.model;
 		// The Map Is Not the Territory: inherit the observed effective level, not prior intent.
-		const thinkingLevel = spec.thinkingLevel ?? spawner?.thinkingLevel;
+		let thinkingLevel = spec.thinkingLevel ?? spawner?.thinkingLevel;
 
 		// 1) Reserve the name synchronously (atomic: duplicate/cap/depth) — closes races.
 		const reserved = engine.reserve(spec.name, spawnerName);
@@ -368,22 +395,62 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 		// Identity, not just the name, distinguishes this reservation from a later re-spawn.
 		const reservation = engine.get(spec.name);
 
+		// 1b) The spawn policy, if one is registered, decides model and effort (after the reservation,
+		// so a refused name or a full swarm never reaches it). A refusal frees the name.
+		let message = spec.message;
+		let tools: string[] | undefined;
+		let toolGuard: ToolGuard | undefined;
+		let policyMeta: unknown;
+		const policy = deps.spawnPolicy?.();
+		if (policy) {
+			const caller: Caller = {
+				name: spawnerName,
+				sessionId: spawner?.sessionId ?? "",
+				model: spawner?.model ?? "",
+				thinkingLevel: spawner?.thinkingLevel,
+				policyMeta: spawner?.policyMeta,
+				cwd: deps.cwd?.() ?? process.cwd(),
+			};
+			const { name, systemPrompt, model, task } = spec;
+			const args = { name, systemPrompt, message: spec.message ?? "", model, thinkingLevel: spec.thinkingLevel, task };
+			// Never throws: a throwing, hanging or malformed policy is a refusal with a reason.
+			const decided = await decideSpawn(policy, args, caller, deps.spawnPolicyTimeoutMs?.() ?? 0);
+			// A kill (or a kill and re-spawn) of this name can land during the policy call; the
+			// reservation is then gone or someone else's, so nothing is created and nothing released.
+			if (engine.get(spec.name) !== reservation) return { ok: false, msg: `error: spawn of '${spec.name}' was cancelled` };
+			if ("reject" in decided) {
+				engine.release(spec.name);
+				return { ok: false, rejected: true, msg: `error: ${decided.reject}` };
+			}
+			const decision = decided.accept;
+			if (decision.model !== undefined) inheritRef = decision.model;
+			if (decision.thinkingLevel !== undefined) thinkingLevel = decision.thinkingLevel;
+			if (decision.briefAppend) message = message ? `${message}\n\n${decision.briefAppend}` : decision.briefAppend;
+			tools = decision.tools;
+			toolGuard = decision.toolGuard;
+			policyMeta = decision.meta;
+		}
+
 		const resolved = resolveModel(inheritRef);
 		if (!resolved) {
-			engine.release(spec.name);
+			// The policy await above lets a kill or re-spawn of this name land first.
+			if (engine.get(spec.name) === reservation) engine.release(spec.name);
 			return { ok: false, msg: `error: ${unknownModelMessage(inheritRef, listAvailableModels?.() ?? [])}` };
 		}
 
 		// 2) Slow session creation (await). A concurrent send_message buffers meanwhile.
 		let session: SessionLike;
 		let sessionFile: string | undefined;
+		let sessionId: string | undefined;
 		try {
-			({ session, sessionFile } = await createSession({
+			({ session, sessionFile, sessionId } = await createSession({
 				name: spec.name,
 				systemPrompt: spec.systemPrompt,
 				spawnedBy: spawnerName,
 				model: resolved.model,
 				thinkingLevel,
+				...(tools ? { tools } : {}),
+				...(toolGuard ? { toolGuard } : {}),
 			}));
 		} catch (e) {
 			if (engine.get(spec.name) === reservation) engine.release(spec.name);
@@ -414,14 +481,18 @@ export function createSpawner(deps: SpawnerDeps): Spawner {
 			// Persisted to roster.json so a restart can rebuild this agent.
 			systemPrompt: spec.systemPrompt,
 			sessionFile,
+			sessionId,
+			policyMeta,
+			...(tools ? { policyTools: tools } : {}),
+			...(toolGuard ? { policyGuarded: true as const } : {}),
 		});
 
 		// 4) Deliver the optional first message atomically (no race; the agent is registered).
 		let sent = "";
-		if (spec.message) {
+		if (message) {
 			// Captured before delivery so the wait can see a reaction that already happened.
 			const sinceEvent = engine.events.length;
-			const outcome = await engine.route(spawnerName, spec.name, spec.message);
+			const outcome = await engine.route(spawnerName, spec.name, message);
 			if (outcome.outcome === "delivered") {
 				// Same bounded observation as send_message: the spawner learns whether the new agent
 				// actually started on its task, without waiting for it to finish.

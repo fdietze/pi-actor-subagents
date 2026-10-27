@@ -98,6 +98,13 @@ export interface AgentToolsDeps {
   persistRoster: () => void;
   /** Refresh the status widget after a change an agent made. */
   updateStatus: () => void;
+  /**
+   * Whether a spawn policy is registered (api.ts), read when the tools are built. Without one,
+   * spawn_subagent keeps its inherit wording and has no `task` parameter.
+   */
+  spawnPolicyActive?: () => boolean;
+  /** Prompt-cache lifetime for list_subagents' cache column (settings.ts); unset or 0 hides it. */
+  promptCacheTtlMs?: () => number;
 }
 
 /** Build the toolset acting as `selfName`. */
@@ -113,6 +120,7 @@ export function makeAgentTools(
     persistRoster,
     updateStatus,
   } = deps;
+  const spawnPolicyActive = deps.spawnPolicyActive?.() ?? false;
   return [
     defineTool({
       name: "spawn_subagent",
@@ -141,17 +149,34 @@ export function makeAgentTools(
         }),
         model: Type.Optional(
           Type.String({
-            description:
-              "Omit to inherit your current model (the default — almost always correct). Set 'provider/id' " +
-              "ONLY when the user explicitly named a specific model; an unknown value reports available models when any are listed.",
+            description: spawnPolicyActive
+              ? "Omit to let the spawn policy decide (inherit if none). Set 'provider/id' only when the user " +
+                "explicitly named a specific model; an unknown value reports available models when any are listed."
+              : "Omit to inherit your current model (the default — almost always correct). Set 'provider/id' " +
+                "ONLY when the user explicitly named a specific model; an unknown value reports available models when any are listed.",
           }),
         ),
         thinkingLevel: Type.Optional(
           StringEnum(THINKING_LEVELS, {
-            description:
-              "often described as <model>@<thinking level>. Omit to inherit your current effective thinking level / effort.",
+            description: spawnPolicyActive
+              ? "often described as <model>@<thinking level>. Omit to let the spawn policy decide (inherit if none)."
+              : "often described as <model>@<thinking level>. Omit to inherit your current effective thinking level / effort.",
           }),
         ),
+        ...(spawnPolicyActive
+          ? {
+              task: Type.Optional(
+                // Opaque to this extension: passed through to the registered spawn policy (api.ts) only.
+                Type.Object(
+                  {},
+                  {
+                    additionalProperties: true,
+                    description: "Optional structured task card for the spawn policy (ignored when none is registered).",
+                  },
+                ),
+              ),
+            }
+          : {}),
         // Required, not optional: an agent that receives no message never gets a turn and
         // would sit idle forever. Requiring the task removes that dead-on-arrival state.
         message: Type.String({
@@ -167,11 +192,17 @@ export function makeAgentTools(
             model: args.model,
             thinkingLevel: args.thinkingLevel,
             message: args.message,
+            task: args.task,
           },
           selfName,
         );
         persistRoster();
-        return { content: [{ type: "text", text: res.msg }], details: {} };
+        return {
+          content: [{ type: "text", text: res.msg }],
+          details: {},
+          // Only a spawn-policy refusal is a tool error; other spawn failures stay plain text results.
+          ...(res.rejected ? { isError: true } : {}),
+        };
       },
     }),
     defineTool({
@@ -287,7 +318,7 @@ export function makeAgentTools(
           content: [
             {
               type: "text",
-              text: formatSnapshot(ordered, selfName, (a) => engine.status(a)),
+              text: formatSnapshot(ordered, selfName, (a) => engine.status(a), Date.now(), deps.promptCacheTtlMs?.() ?? 0),
             },
           ],
           details: {},

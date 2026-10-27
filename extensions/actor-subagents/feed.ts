@@ -2,6 +2,7 @@
  * Pure formatting for the read-only observability of the agents.
  * No pi/TUI dependency; the strings are rendered into the UI in index.ts.
  */
+import { type AgentInfo, agentInfo } from "./agent-info.ts";
 import type { OrderedAgent } from "./agent-order.ts";
 import { type AgentStatus, formatStatus, formatStatusDetail } from "./agent-status.ts";
 import type { AgentRecord } from "./agent-record.ts";
@@ -18,6 +19,24 @@ function formatAge(ms: number): string {
 	const m = Math.floor(s / 60);
 	if (m < 60) return `${m}m`;
 	return `${Math.floor(m / 60)}h`;
+}
+
+/**
+ * `cache=warm(1m left) ctx=143k $2.10`: what waking this agent now would cost (how long it has
+ * been idle is the row's `last` age). Cache warmth needs the provider's prompt-cache lifetime
+ * (`cacheTtlMs`, settings.ts); 0 leaves it out, and so does a running agent, whose request is
+ * under way.
+ */
+function formatUsage(info: AgentInfo, now: number, cacheTtlMs: number): string {
+	const parts: string[] = [];
+	if (cacheTtlMs > 0 && info.state !== "running" && info.lastRequestAt !== undefined) {
+		const left = cacheTtlMs - (now - info.lastRequestAt);
+		parts.push(left > 0 ? `cache=warm(${formatAge(left)} left)` : "cache=cold");
+	}
+	const tokens = info.contextTokens;
+	if (tokens !== undefined) parts.push(`ctx=${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens}`);
+	if (info.costUsd !== undefined) parts.push(`$${info.costUsd.toFixed(2)}`);
+	return parts.length ? `  ${parts.join(" ")}` : "";
 }
 
 /** Relation of an agent to the viewer, for orientation in deep hierarchies. */
@@ -45,6 +64,7 @@ export function formatSnapshot(
 	// whether a paused ancestor holds it.
 	status: (a: AgentRecord) => AgentStatus,
 	now: number = Date.now(),
+	cacheTtlMs = 0,
 ): string {
 	if (ordered.length === 0) return "no agents";
 	const agents = ordered.map((o) => o.agent);
@@ -71,6 +91,7 @@ export function formatSnapshot(
 		agents.map((a) => statusOf(a).length),
 		STATUS_CAP,
 	);
+	const usageOf = (a: AgentRecord) => formatUsage(agentInfo(a, status(a), now), now, cacheTtlMs);
 	const rows = ordered.map((o) => {
 		const a = o.agent;
 		const status = statusOf(a);
@@ -89,7 +110,7 @@ export function formatSnapshot(
 		return (
 			`  ${nameCell(o).padEnd(nameW)} ${rel.padEnd(6)} ${fit(status, statusW)} ` +
 			`turns:${turns.padEnd(3)} ctx:${ctx.padEnd(4)} last ${formatAge(now - a.lastActivity).padEnd(4)} ` +
-			`${model}  ${origin}${extensions ? `  ${extensions}` : ""}`
+			`${model}  ${origin}${usageOf(a)}${extensions ? `  ${extensions}` : ""}`
 		);
 	});
 	return ["agents:", ...rows].join("\n");

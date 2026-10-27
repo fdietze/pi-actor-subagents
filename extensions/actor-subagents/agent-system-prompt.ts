@@ -11,12 +11,15 @@ export function agentSystemPrompt(
   name: string,
   systemPrompt: string,
   spawnedBy: string,
+  /** A spawn policy (api.ts) is registered: model and effort are left to it rather than inherited. */
+  spawnPolicyActive = false,
 ): string {
   return [
     `You are agent "${name}" in a multi-agent system.`,
     `You were spawned by "${spawnedBy}".`,
     "You can talk to other agents with these tools:",
-    "- spawn_subagent({name, systemPrompt, model?, thinkingLevel?, message}): create a named background agent with its own model session (message = its first task); omit model/thinkingLevel to inherit yours.",
+    "- spawn_subagent({name, systemPrompt, model?, thinkingLevel?, message}): create a named background agent with its own model session (message = its first task); omit model/thinkingLevel to " +
+      (spawnPolicyActive ? "let the spawn policy decide (inherit if none)." : "inherit yours."),
     '- send_message({to, content}): to is an array of agent names (multicast); fire-and-forget (e.g. ["main"]). It never waits for the reply, but it does report each receiver\'s state back to you.',
     "- list_subagents(): see who exists.",
     "- pause_subagents({names?}) / resume_subagents({names?}) / kill_subagents({names}): control the agents in your subtree (those you spawned, and theirs); each acts on the named agents' whole subtrees. Omitted, empty or whitespace-only names in pause/resume mean your direct children.",

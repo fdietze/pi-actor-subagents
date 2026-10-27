@@ -64,6 +64,22 @@ export interface RosterEntry {
 	thinkingLevel?: ThinkingLevel;
 	systemPrompt: string;
 	sessionFile: string;
+	/** The spawn policy's tool allowlist (api.ts PolicyAccept.tools); restored as it was. */
+	tools?: string[];
+	/** The spawn policy's meta, as JSON. */
+	meta?: unknown;
+	/** The agent ran with a spawn-policy tool guard, which only the policy can re-attach. */
+	guarded?: true;
+}
+
+/** A JSON copy of `value`, or undefined when it has none (a cycle, a BigInt, a bare function). */
+function jsonCopy(value: unknown): unknown {
+	try {
+		const text = JSON.stringify(value);
+		return text === undefined ? undefined : JSON.parse(text);
+	} catch {
+		return undefined;
+	}
 }
 
 /** Roster entries from engine records; only agents with a real session file persist. */
@@ -76,19 +92,29 @@ export function serializeRoster(
 		thinkingLevel?: ThinkingLevel;
 		systemPrompt?: string;
 		sessionFile?: string;
+		policyTools?: string[];
+		policyMeta?: unknown;
+		policyGuarded?: true;
 	}>,
 ): RosterEntry[] {
 	return agents
 		.filter((a) => a.name !== "main" && typeof a.sessionFile === "string")
-		.map((a) => ({
-			name: a.name,
-			spawnedBy: a.spawnedBy,
-			depth: a.depth,
-			model: a.model,
-			...(a.thinkingLevel ? { thinkingLevel: a.thinkingLevel } : {}),
-			systemPrompt: a.systemPrompt ?? "",
-			sessionFile: a.sessionFile as string,
-		}));
+		.map((a) => {
+			// Copied here so one value that is not JSON cannot keep the whole roster from being written.
+			const meta = a.policyMeta === undefined ? undefined : jsonCopy(a.policyMeta);
+			return {
+				name: a.name,
+				spawnedBy: a.spawnedBy,
+				depth: a.depth,
+				model: a.model,
+				...(a.thinkingLevel ? { thinkingLevel: a.thinkingLevel } : {}),
+				systemPrompt: a.systemPrompt ?? "",
+				sessionFile: a.sessionFile as string,
+				...(a.policyTools ? { tools: [...a.policyTools] } : {}),
+				...(meta !== undefined ? { meta } : {}),
+				...(a.policyGuarded ? { guarded: true as const } : {}),
+			};
+		});
 }
 
 /**
@@ -122,6 +148,8 @@ export function sessionSpecFromRoster<T>(entry: RosterEntry, model: T) {
 		spawnedBy: entry.spawnedBy,
 		model,
 		...(entry.thinkingLevel ? { thinkingLevel: entry.thinkingLevel } : {}),
+		// Fail closed: a restricted agent comes back with the same allowlist.
+		...(entry.tools ? { tools: entry.tools } : {}),
 	};
 }
 
@@ -143,6 +171,10 @@ export function parseRoster(json: string): RosterEntry[] {
 			typeof e.model === "string" &&
 			(e.thinkingLevel === undefined || isThinkingLevel(e.thinkingLevel)) &&
 			typeof e.systemPrompt === "string" &&
-			typeof e.sessionFile === "string",
+			typeof e.sessionFile === "string" &&
+			// An unreadable restriction drops the entry rather than restoring the agent unrestricted.
+			(e.tools === undefined ||
+				(Array.isArray(e.tools) && e.tools.every((t: unknown) => typeof t === "string" && t.length > 0))) &&
+			(e.guarded === undefined || e.guarded === true),
 	);
 }
