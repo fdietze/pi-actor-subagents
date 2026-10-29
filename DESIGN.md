@@ -2,7 +2,7 @@
 
 ## Purpose
 
-actor-subagents adds a bounded actor swarm to one foreground pi session. Named background agents have independent model sessions, communicate through explicit messages, and form an ownership tree rooted at `main`. The foreground is the main human conversation; child transcripts remain visible in history and the panel, whose input can send a real user turn to a child.
+actor-subagents adds a bounded actor swarm to one foreground pi session. Named background agents have independent model sessions, communicate through explicit messages, and form an ownership tree rooted at `main`. The foreground is the main human conversation; child transcripts remain visible in history and the panel, whose input can send a real user turn to a child. The foreground branch is readable by every agent through `subagent_history` so a child can find the context its task came from; the child extension policy does not restrict this.
 
 ## Runtime structure
 

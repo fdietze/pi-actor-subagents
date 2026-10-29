@@ -395,9 +395,8 @@ export function makeAgentTools(
           context?.expanded ?? false,
         ),
       description:
-        "Inspect a background agent's message transcript: response text, tool calls and messages, never " +
-        "thinking ('main' is the foreground chat and has no " +
-        "mirrored transcript). offset: start index (0 = beginning, the default; " +
+        "Inspect an agent's message transcript, including 'main' (the foreground chat): response text, tool calls and messages, never " +
+        "thinking. offset: start index (0 = beginning, the default; " +
         "negative = from the end, e.g. -30 = last 30). limit: window size (default 30). The header " +
         "reports the total message count and the shown range. Text and tool arguments/results are clipped; nontext content is omitted. Paging cannot retrieve clipped remainders. At index 0 the original spawn prompt is shown, not the complete effective system prompt. Removed agents are unknown.",
       parameters: Type.Object({
@@ -422,18 +421,6 @@ export function makeAgentTools(
         if (!rec)
           return {
             content: [{ type: "text", text: `unknown agent '${args.name}'` }],
-            details: {},
-          };
-        // 'main' is the foreground chat; its transcript is not mirrored into the registry,
-        // so an empty list here would read as "main said nothing". Say so explicitly.
-        if (args.name === "main")
-          return {
-            content: [
-              {
-                type: "text",
-                text: "agent main · transcript not available here — main is the foreground chat itself, which is not mirrored into the agent registry.",
-              },
-            ],
             details: {},
           };
         const text = formatHistory({

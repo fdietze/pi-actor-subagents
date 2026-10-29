@@ -14,7 +14,9 @@ import {
   getAgentDir,
   ModelRegistry,
   ModelRuntime,
+  type SessionEntry,
   SessionManager,
+  sessionEntryToContextMessages,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -233,7 +235,20 @@ type MainLiveState = {
    * stale throws (see mainBusy). Optional: a state object from an older load lacks it.
    */
   isIdle?: () => boolean;
+  /**
+   * The foreground transcript along the current branch, read on demand so subagent_history can
+   * show children the context their task came from. Optional for the same reason as isIdle.
+   */
+  messages?: () => unknown[];
 };
+/** Main's transcript; empty when no live foreground was captured yet or it went stale. */
+function mainMessages(): unknown[] {
+  try {
+    return mainState().messages?.() ?? [];
+  } catch {
+    return [];
+  }
+}
 /**
  * Is main's run active? Unknown (no or a stale ctx) counts as busy: the notice then waits for the
  * next agent_settled, which recaptures a live ctx and flushes — waiting is safe, appending
@@ -370,9 +385,15 @@ export default function subagents(pi: ExtensionAPI) {
   const captureMainContext = (c: {
     getContextUsage(): MainLiveState["usage"];
     isIdle(): boolean;
+    sessionManager: { getBranch(): SessionEntry[] };
   }) => {
     // The function, not the ctx: it is only ever called guarded (mainBusy).
     mainState().isIdle = () => c.isIdle();
+    // The full branch, not the compacted LLM context: a child looking for the origin of its task
+    // needs what was actually said, so context_edit replacements are not applied. Called guarded
+    // (mainMessages).
+    mainState().messages = () =>
+      c.sessionManager.getBranch().flatMap(sessionEntryToContextMessages);
     try {
       mainState().usage = c.getContextUsage();
     } catch {
@@ -839,7 +860,7 @@ export default function subagents(pi: ExtensionAPI) {
         turns: 0,
         lastActivity: Date.now(),
         view: {
-          getMessages: () => [], // main transcript = the main chat (not mirrored)
+          getMessages: mainMessages, // globalThis-backed, survives /reload
           getContextUsage: () => mainState().usage, // globalThis-backed, survives /reload
           subscribe: () => () => {},
         },

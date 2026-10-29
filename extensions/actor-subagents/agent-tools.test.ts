@@ -119,3 +119,24 @@ test("descriptions distinguish handoff, observation, persistence attempts and si
 	assert.match(description("pause_subagents"), /Effects already in flight may still settle/);
 	assert.match(description("subagent_history"), /Paging cannot retrieve clipped remainders/);
 });
+
+test("subagent_history reads main's transcript like any other agent's", async () => {
+	const engine = new Engine({ maxAgents: 8, maxSpawnDepth: 3 });
+	engine.addAgent({
+		...record("main"),
+		view: {
+			getMessages: () => [{ role: "user", content: "build the parser, keep it streaming" }],
+			getContextUsage: () => undefined,
+			subscribe: () => () => {},
+		},
+	});
+	engine.addAgent(record("worker"));
+	const result = await toolOf(engine, "worker", "subagent_history").execute(
+		"call-1",
+		{ name: "main" } as never,
+		undefined,
+		undefined,
+		undefined as never,
+	);
+	assert.match(textOf(result) ?? "", /build the parser, keep it streaming/);
+});
