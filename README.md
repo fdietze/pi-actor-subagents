@@ -56,7 +56,7 @@ Optional file: `~/.pi/agent/actor-subagents/settings.json` (inside Pi's configur
 
 ## Coordination
 
-- **Handshake:** a new child is instructed to send its parent its understanding of the task and clarification questions, then wait for a `send_message` go-ahead before working. This is an agent protocol, not an enforced scheduling barrier.
+- **Backbrief:** for each task from its parent, a child is instructed to investigate briefly without changing anything, then send its parent the goal and done-criteria in its own words, numbered assumptions, a plan, the main risk and open questions, and wait for a `send_message` go-ahead before working. Stated assumptions surface gaps that questions alone miss: the parent recognizes a wrong assumption more easily than it recalls what it forgot to say. The parent can waive it in the task. This is an agent protocol, not an enforced scheduling barrier.
 - **Ownership:** every agent controls the agents it spawns and their descendants; messaging and inspection are open to all. `set_status` is for background agents.
 - **Errors:** a new child error sends its live direct parent a scheduler message: it requests a turn when idle, steers a busy parent, and buffers while the parent is paused or still stopping. It does not restart the child. Pause, resume and kill notices stay silent.
 - **Persistence:** reopening the same saved main session restores agents paused; resume them explicitly. Buffered messages, progress, and ETA are not saved.

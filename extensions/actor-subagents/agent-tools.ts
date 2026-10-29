@@ -129,7 +129,7 @@ export function makeAgentTools(
         "File-backed sessions attempt to save membership and transcripts; roster write failures are not reported. Reopening the same main session attempts paused restoration; missing files, unavailable models or reopen failures skip agents. Resume restored agents explicitly. Buffered messages, pending notices, custom status and ETA are not persisted. " +
         "The result reports handoff and briefly observed activity, not receipt or task completion. 'idle (no reaction)' means no activity was observed during that window; main is not watched. " +
         "After spawning, END YOUR TURN. Replies start an idle recipient or steer a busy one after current tools, before the next model request; paused or still-stopping recipients buffer messages. Do NOT poll or wait in a loop; inspect only if you suspect a problem. " +
-        "The child is instructed to reply with its understanding and questions, then wait for your send_message go-ahead; this is a protocol, not guaranteed compliance." +
+        "For each task from you, the child is instructed to investigate briefly without changing anything, then backbrief you (goal and done-criteria, numbered assumptions, plan, main risk, open questions) and wait for your send_message go-ahead; correct wrong assumptions by number. This is a protocol, not guaranteed compliance." +
         // Subagents escalate user questions through their spawner rather than opening a user dialog.
         (selfName === "main"
           ? " If a spawned agent asks something you can't confidently answer yourself, ask the user rather than guessing."
@@ -156,7 +156,7 @@ export function makeAgentTools(
         // would sit idle forever. Requiring the task removes that dead-on-arrival state.
         message: Type.String({
           description:
-            "The task, submitted as the new agent's first message after spawn",
+            "The task, submitted as the new agent's first message after spawn: the goal and why it matters, what counts as done and the evidence you expect, constraints and what must not happen, which decisions it may take alone, where the relevant context is, and whether it may skip the backbrief.",
         }),
       }),
       execute: async (_id, args) => {
