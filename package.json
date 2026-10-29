@@ -16,7 +16,7 @@
   },
   "scripts": {
     "typecheck": "tsgo -p tsconfig.json",
-    "lint": "oxlint extensions scripts",
+    "lint": "oxlint --deny-warnings extensions scripts",
     "test": "find extensions scripts -name '*.test.ts' -print0 | xargs -0 -r node --test",
     "ci": "actionlint -ignore '^unexpected key \"queue\" for \"concurrency\" section\\.' && npm run typecheck && npm run lint && npm run test",
     "publish:ci": "node scripts/publish.ts",
